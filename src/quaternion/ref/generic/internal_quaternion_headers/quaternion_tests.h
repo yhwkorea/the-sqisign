@@ -343,6 +343,12 @@ int quat_test_hnf(void);
  */
 int quat_test_with_randomization(void);
 
+/** @brief Test for Modified LLL (MLLL) algorithm
+ *
+ * Tests MLLL correctness vs HNF, LLL-reducedness, and dependency handling.
+ */
+int quat_test_mlll_all(void);
+
 /** @}
  */
 

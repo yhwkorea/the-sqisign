@@ -63,6 +63,7 @@ main(int argc, char *argv[])
     res = res | quat_test_normeq();
     res = res | quat_test_lat_ball();
     res = res | quat_test_with_randomization();
+    res = res | quat_test_mlll_all();
     if (res != 0) {
         printf("\nSome tests failed!\n");
     }
