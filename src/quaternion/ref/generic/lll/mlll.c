@@ -19,6 +19,7 @@
 #include "internal.h"
 #include "lll_internals.h"
 #include "mlll_internals.h"
+#include "bitsize_tracker.h"
 
 /* ---------- helpers ---------- */
 
@@ -250,6 +251,7 @@ size_reduce:
 
         ibq_round(&t, &mu[m][l]);
         ibz_vec_4_sub_scalar_mul(&b[m], &t, &b[l]);
+        tracker_update_vec4(&b[m]); /* track size-reduce intermediate */
 
         ibq_set(&t_q, &t, &ibz_const_one);
         ibq_sub(&mu[m][l], &mu[m][l], &t_q);
@@ -401,6 +403,8 @@ do_swap:
 
         /* Paper line 21: swap vectors and mu rows */
         ibz_vec_4_swap(&b[m], &b[m - 1]);
+        tracker_update_vec4(&b[m]); /* track swap intermediate */
+        tracker_update_vec4(&b[m - 1]);
         {
             ibq_t tmp_q;
             ibq_init(&tmp_q);
@@ -470,6 +474,7 @@ done:
 
                         ibq_round(&t, &mu[m][l]);
                         ibz_vec_4_sub_scalar_mul(&b[m], &t, &b[l]);
+                        tracker_update_vec4(&b[m]); /* track final-pass intermediate */
 
                         ibq_set(&t_q, &t, &ibz_const_one);
                         ibq_sub(&mu[m][l], &mu[m][l], &t_q);
