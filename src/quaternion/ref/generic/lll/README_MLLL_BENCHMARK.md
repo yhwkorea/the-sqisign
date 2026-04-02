@@ -4,6 +4,35 @@ Implementation of "Compact Quaternion Algorithms for SQIsign" (Kim, Lee, Yoo - K
 
 Compares HNF-based vs MLLL-based ideal multiplication (`quat_lattice_mul` vs `quat_lattice_mul_mlll`) on random O0-ideal lattice pairs.
 
+## Current Status
+
+The existing HNF-based ideal operations (`quat_lattice_mul`, `quat_lattice_add`) are **not replaced**. MLLL-based functions are implemented separately and compared against HNF on identical inputs to validate correctness and measure intermediate bit sizes.
+
+## File Structure
+
+| File | Description |
+|------|-------------|
+| `mlll.c` | **Core implementation**. Paper Algorithm 1 (MLLL) + Algorithm 2 (CompactIdealMultiplication). Provides `quat_mlll()`, `quat_lattice_mul_mlll()`, `quat_lattice_add_mlll()`. |
+| `mlll_internals.h` | Function declarations and constants (`MLLL_MAX_GENERATORS=16`, etc.) |
+| `mlll_tests.c` | **Correctness verification**. Runs both HNF and MLLL on same inputs, checks lattice equality via `quat_lattice_equal()`. 4 tests: (1) HNF vs MLLL result comparison, (2) LLL-reducedness of MLLL output, (3) linearly dependent generator handling, (4) full CompactIdealMultiplication flow. |
+| `mlll_benchmark.c` | **Intermediate bit size comparison**. Uses `bitsize_tracker` to record max bit size of all integers during HNF/MLLL execution. Flow: `tracker_reset()` → run operation → `tracker_get_max()`. |
+| `bitsize_tracker.h` | Benchmark-only instrumentation. `tracker_update_vec4()` calls inserted in `mlll.c` and `hnf.c` track intermediate integer sizes. No-op in normal builds (requires `BITSIZE_TRACKER_ENABLE`). |
+| `test_mlll_only.c` | Standalone test entry point for MLLL tests only. |
+
+## Paper Algorithm Mapping
+
+| Paper | Code |
+|-------|------|
+| Algorithm 1 (MLLL) | `quat_mlll()` in `mlll.c:177-571` |
+| Algorithm 2 (CompactIdealMultiplication) | `quat_lattice_mul_mlll()` in `mlll.c:576-617` |
+| Lemma 1 (intermediate bound ≤ max\|\|a_i\|\|²) | Experimentally verified by `mlll_benchmark.c` |
+
+## Not Yet Done
+
+- Actual HNF → MLLL replacement in SQIsign pipeline (`lattice.c:177` still uses HNF)
+- Algorithm 3 (RandomIdealGivenPrimeNorm)
+- Algorithm 4 (RandomEquivalentPrimeIdeal) modification
+
 ## Key Metric: Maximum Intermediate Bit Size
 
 The paper's core claim is that MLLL bounds intermediate integer sizes to `max ||a_i||^2` (input norm squared), while HNF can blow up far beyond that. This is what determines whether **fixed-precision** arithmetic is feasible.

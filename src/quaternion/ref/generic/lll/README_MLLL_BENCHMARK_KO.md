@@ -4,6 +4,42 @@
 
 HNF 기반 vs MLLL 기반 이데알 곱셈(`quat_lattice_mul` vs `quat_lattice_mul_mlll`)을 랜덤 O0-이데알 격자 쌍에 대해 비교.
 
+## 구현 현황
+
+### 현재 상태
+
+기존 SQIsign의 HNF 기반 이데알 연산(`quat_lattice_mul`, `quat_lattice_add`)을 **교체하지 않고**, MLLL 기반 함수를 별도로 구현하여 **동일 입력에 대해 두 방식의 결과와 중간값 비트 크기를 비교**한 상태이다.
+
+### 파일 구조
+
+| 파일 | 설명 |
+|------|------|
+| `mlll.c` | **핵심 구현**. 논문 Algorithm 1 (MLLL 알고리즘) + Algorithm 2 (CompactIdealMultiplication). `quat_mlll()`, `quat_lattice_mul_mlll()`, `quat_lattice_add_mlll()` 세 함수를 제공한다. |
+| `mlll_internals.h` | MLLL 함수 선언 및 상수 정의 (`MLLL_MAX_GENERATORS=16` 등) |
+| `mlll_tests.c` | **정확성 검증**. 같은 입력에 대해 HNF(`quat_lattice_mul`)와 MLLL(`quat_lattice_mul_mlll`)을 모두 실행하고, `quat_lattice_equal()`로 결과 격자가 동일한지 확인한다. 총 4개 테스트: (1) HNF vs MLLL 결과 비교, (2) MLLL 출력의 LLL-reducedness 검증, (3) 선형 종속 벡터 처리, (4) CompactIdealMultiplication 전체 흐름 |
+| `mlll_benchmark.c` | **중간값 비트 크기 비교**. `bitsize_tracker`를 이용해 HNF/MLLL 실행 중 나오는 모든 정수의 최대 비트 크기를 추적한다. `tracker_reset()` → 연산 실행 → `tracker_get_max()`로 최대값 수집. |
+| `bitsize_tracker.h` | 벤치마크 전용 계측 도구. `mlll.c`와 `hnf.c` 내부에 `tracker_update_vec4()` 호출이 삽입되어 있어, 연산 중 중간값의 비트 크기를 글로벌 변수로 추적한다. 일반 빌드에서는 `BITSIZE_TRACKER_ENABLE` 미정의 시 no-op. |
+| `test_mlll_only.c` | MLLL 테스트만 독립 실행하는 진입점 (main 함수) |
+
+### 비교 방법
+
+1. **정확성**: `mlll_tests.c`에서 동일 격자 쌍에 대해 `quat_lattice_mul()`(HNF)과 `quat_lattice_mul_mlll()`(MLLL)을 호출하고, `quat_lattice_equal()`로 결과가 같은 격자인지 비교
+2. **중간값 비트 크기**: `mlll_benchmark.c`의 `bench_one_mul()`에서 `bitsize_tracker`를 켜고 각 방식을 실행하여 연산 중 등장하는 정수의 최대 비트 크기를 기록
+
+### 논문 알고리즘 매핑
+
+| 논문 | 코드 |
+|------|------|
+| Algorithm 1 (MLLL) | `quat_mlll()` in `mlll.c:177-571` |
+| Algorithm 2 (CompactIdealMultiplication) | `quat_lattice_mul_mlll()` in `mlll.c:576-617` |
+| Lemma 1 (중간값 바운드 ≤ max\|\|a_i\|\|²) | `mlll_benchmark.c`로 실험적 검증 |
+
+### 아직 안 한 것
+
+- SQIsign 파이프라인에서 HNF → MLLL 실제 교체 (현재 `lattice.c:177`의 `quat_lattice_mul`은 여전히 HNF 사용)
+- 논문 Algorithm 3 (RandomIdealGivenPrimeNorm) 구현
+- 논문 Algorithm 4 (RandomEquivalentPrimeIdeal) 수정
+
 ## 핵심 지표: 최대 중간값 비트 크기
 
 논문의 핵심 주장은 MLLL이 중간 정수 크기를 `max ||a_i||^2` (입력 노름의 제곱)으로 바운드하는 반면, HNF는 그보다 훨씬 커질 수 있다는 것이다. 이것이 **고정 정밀도(fixed-precision)** 연산의 가능 여부를 결정한다.
