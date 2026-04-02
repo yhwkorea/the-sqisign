@@ -41,25 +41,28 @@ The paper's core claim is that MLLL bounds intermediate integer sizes to `max ||
 
 | Metric | HNF | MLLL | Ratio (MLLL/HNF) |
 |--------|-----|------|-------------------|
-| **Max intermediate bits** | **2163** | **255** | **0.118** |
-| Avg intermediate bits | 1759 | 253 | 0.144 |
+| **Max intermediate bits** | **2162** | **255** | **0.118** |
+| Avg intermediate bits | 2073 | 253 | 0.122 |
 | Max output bits | 128 | 127 | ~1.0 |
+| Total time | 1.16 ms | 4102 ms | x3527 |
 
 ### NIST Level 3 (p ~ 2^381, norm bitsize = 193, 5 trials)
 
 | Metric | HNF | MLLL | Ratio (MLLL/HNF) |
 |--------|-----|------|-------------------|
-| **Max intermediate bits** | **3279** | **387** | **0.118** |
-| Avg intermediate bits | 3267 | 385 | 0.118 |
-| Max output bits | 194 | 193 | ~1.0 |
+| **Max intermediate bits** | **3290** | **388** | **0.118** |
+| Avg intermediate bits | 3265 | 385 | 0.118 |
+| Max output bits | 194 | 194 | ~1.0 |
+| Total time | 0.74 ms | 10269 ms | x13914 |
 
 ### NIST Level 5 (p ~ 2^509, norm bitsize = 254, 3 trials)
 
 | Metric | HNF | MLLL | Ratio (MLLL/HNF) |
 |--------|-----|------|-------------------|
-| **Max intermediate bits** | **4312** | **510** | **0.118** |
-| Avg intermediate bits | 3971 | 508 | 0.128 |
+| **Max intermediate bits** | **4325** | **510** | **0.118** |
+| Avg intermediate bits | 3975 | 508 | 0.128 |
 | Max output bits | 255 | 254 | ~1.0 |
+| Total time | 0.51 ms | 6511 ms | x12743 |
 
 ## Analysis
 
@@ -99,4 +102,4 @@ make sqisign_bm_mlll -j4
 
 ## Date
 
-2026-03-30
+2026-03-30 (initial benchmark), 2026-04-02 (full test pass, re-run with timing data)
