@@ -12,6 +12,7 @@
 
 #include <quaternion.h>
 
+#ifdef BITSIZE_TRACKER_ENABLE
 /* Global tracker state (not thread-safe, but fine for benchmarks) */
 extern int _bitsize_tracker_max;
 extern int _bitsize_tracker_enabled;
@@ -51,5 +52,14 @@ static inline void tracker_update_mat4x4(const ibz_mat_4x4_t *m) {
                 tracker_update_ibz(&((*m)[i][j]));
     }
 }
+#else
+/* No-op stubs when tracker is disabled */
+static inline void tracker_reset(void) {}
+static inline void tracker_disable(void) {}
+static inline int tracker_get_max(void) { return 0; }
+static inline void tracker_update_ibz(const ibz_t *v) { (void)v; }
+static inline void tracker_update_vec4(const ibz_vec_4_t *v) { (void)v; }
+static inline void tracker_update_mat4x4(const ibz_mat_4x4_t *m) { (void)m; }
+#endif
 
 #endif
