@@ -317,14 +317,14 @@ remove_vector:
     }
     beta--;
 
-    if (alpha >= g)
-        goto done;
-
     /* Recompute Gram and Cholesky from m */
     for (int i = m; i < beta; i++) {
         gram_compute_row(i, beta, G, b, &alg->p);
         cholesky_row(i, G, r, u);
     }
+
+    if (alpha >= g)
+        goto done;
 
     tau = m + 1;
     if (tau < 1)
@@ -334,14 +334,15 @@ remove_vector:
 done:
     assert(alpha >= g);
 
-    /* Use HNF to extract the correct rank-4 basis from all b[] vectors,
-     * then LLL-reduce it with L². */
+    /* Stop tracking: reduction loop is done, post-processing below. */
+    tracker_disable();
+
+    /* Extract rank-4 basis using HNF (temporary — will be replaced by
+     * proper D_k=0 handling per Pohst/Matthews once implemented). */
     {
-        /* Compute modulus: determinant of any non-singular 4x4 submatrix */
         ibz_t mod;
         ibz_init(&mod);
 
-        /* Try first 4 non-zero vectors */
         ibz_mat_4x4_t tmpmat;
         ibz_mat_4x4_init(&tmpmat);
         int cnt = 0;
@@ -356,7 +357,6 @@ done:
             ibz_mat_4x4_inv_with_det_as_denom(NULL, &mod, &tmpmat);
         ibz_abs(&mod, &mod);
 
-        /* If det=0, try all subsets until we find a non-singular one */
         if (ibz_is_zero(&mod) && beta >= 4) {
             for (int a = 0; a < beta - 3 && ibz_is_zero(&mod); a++)
                 for (int c = a + 1; c < beta - 2 && ibz_is_zero(&mod); c++)
@@ -373,11 +373,9 @@ done:
         ibz_mat_4x4_finalize(&tmpmat);
 
         if (!ibz_is_zero(&mod) && beta > 4) {
-            /* HNF to get exact rank-4 basis */
             ibz_mat_4xn_hnf_mod_core(basis, beta, (const ibz_vec_4_t *)b, &mod);
             *rank = 4;
         } else if (!ibz_is_zero(&mod)) {
-            /* beta <= 4: just copy */
             *rank = 0;
             for (int i = 0; i < 4; i++)
                 for (int j = 0; j < 4; j++)
@@ -390,7 +388,6 @@ done:
                 }
             }
         } else {
-            /* Fallback: just copy first non-zero vectors */
             *rank = 0;
             for (int i = 0; i < 4; i++)
                 for (int j = 0; j < 4; j++)
