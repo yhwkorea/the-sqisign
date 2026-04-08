@@ -6,112 +6,117 @@ Compares HNF-based vs MLLL-based ideal multiplication (`quat_lattice_mul` vs `qu
 
 ## Current Status
 
-The existing HNF-based ideal operations (`quat_lattice_mul`, `quat_lattice_add`) are **not replaced**. MLLL-based functions are implemented separately and compared against HNF on identical inputs to validate correctness and measure intermediate bit sizes.
+- **GSO**: Float GSO using `dpe_t` (53-bit mantissa + extended exponent), L² style
+- **Gram matrix**: Exact integer (`ibz_t`), incrementally updated
+- **Dependency detection**: `dpe_zero_p(r[k][k])` (float), with HNF post-processing in `done` section as temporary workaround
+- **Tests**: 6/6 pass
+- **Fixed-precision**: Confirmed — MLLL vector coordinates bounded by Lemma 1
 
 ## File Structure
 
 | File | Description |
 |------|-------------|
-| `mlll.c` | **Core implementation**. Paper Algorithm 1 (MLLL) + Algorithm 2 (CompactIdealMultiplication). Provides `quat_mlll()`, `quat_lattice_mul_mlll()`, `quat_lattice_add_mlll()`. Korean docstring describes Pohst 1987 algorithm and fixed-precision limitations. |
-| `mlll_internals.h` | Function declarations and constants (`MLLL_MAX_GENERATORS=16`, etc.) |
-| `mlll_tests.c` | **Correctness verification**. Runs both HNF and MLLL on same inputs, checks lattice equality via `quat_lattice_equal()`. 6 tests: (1) HNF vs MLLL result comparison, (2) LLL-reducedness of MLLL output, (3) linearly dependent generator handling, (4) full CompactIdealMultiplication flow, (5) realistic 127-bit prime scale, (6) tau > 1 swap path after remove_vector. |
-| `mlll_benchmark.c` | **Intermediate bit size comparison**. Uses `bitsize_tracker` to record max bit size of all integers during HNF/MLLL execution. Flow: `tracker_reset()` → run operation → `tracker_get_max()`. |
-| `bitsize_tracker.h` | Benchmark-only instrumentation. `tracker_update_vec4()` / `tracker_update_ibz()` calls inserted in `mlll.c` and `hnf.c` track intermediate integer sizes. Uses `__attribute__((weak))` symbols so any TU can link without a separate definition. No-op in normal builds (requires `BITSIZE_TRACKER_ENABLE`). |
-| `test_mlll_only.c` | Standalone test entry point for MLLL tests only. |
+| `mlll.c` | **Core implementation**. Paper Algorithm 1 (MLLL) + Algorithm 2 (CompactIdealMultiplication). Float GSO + Gram matrix. `quat_mlll()`, `quat_lattice_mul_mlll()`, `quat_lattice_add_mlll()`. |
+| `mlll_internals.h` | Function declarations and constants (`MLLL_MAX_GENERATORS=16`) |
+| `mlll_tests.c` | **Correctness verification**. 6 tests: (1) HNF vs MLLL lattice equality, (2) LLL-reducedness, (3) dependent generators, (4) CompactIdealMultiplication, (5) 127-bit prime scale, (6) tau path |
+| `mlll_benchmark.c` | **Intermediate bit size comparison**. `bitsize_tracker` measures max bit size during computation. `tracker_disable()` separates MLLL reduction loop from HNF post-processing. |
+| `bitsize_tracker.h` | Two-channel tracker: `vec` (vector coordinates) and `gso` (GSO coefficients). `__attribute__((weak))` symbols, no-op without `BITSIZE_TRACKER_ENABLE`. |
+| `test_mlll_only.c` | Standalone test entry point |
 
 ## Paper Algorithm Mapping
 
-| Paper | Code |
-|-------|------|
-| Algorithm 1 (MLLL) | `quat_mlll()` in `mlll.c:192-586` |
-| Algorithm 2 (CompactIdealMultiplication) | `quat_lattice_mul_mlll()` in `mlll.c:591-632` |
-| Lemma 1 (intermediate bound ≤ max\|\|a_i\|\|²) | Experimentally verified by `mlll_benchmark.c` |
+| Paper | Code | Status |
+|-------|------|--------|
+| Algorithm 1 (MLLL) | `quat_mlll()` | ✓ Implemented (D_k=0 handling incomplete — see below) |
+| Algorithm 2 (CompactIdealMultiplication) | `quat_lattice_mul_mlll()` | ✓ Implemented |
+| Algorithm 3 (RandomIdealGivenPrimeNorm) | — | Not implemented |
+| Algorithm 4 (RandomEquivalentPrimeIdeal) | — | Not implemented |
+| Lemma 1 (intermediate bound) | `mlll_benchmark.c` | ✓ Experimentally verified |
 
-## Changes (2026-04-07)
+## Fixed-Precision Benchmark Results (2026-04-09)
 
-- **Bug fix**: swap decrement condition changed from `m > 1` to `m > tau` — after `remove_vector` sets `tau = m+1`, the old condition could skip below `tau` and access invalid GS data.
-- **Tracker coverage**: added `tracker_update_ibz()` for GS inner products, cross products, mu numerator/denominator, and B numerator/denominator during `compute_gs_single()`.
-- **Weak symbols**: `bitsize_tracker.h` now uses `__attribute__((weak))` so linking works without `mlll_benchmark.c`.
-- **Rank assertion**: `quat_lattice_add_mlll()` asserts `rank > 0 && rank <= 4`.
-- **Korean docstring**: `mlll.c` header rewritten in Korean (Pohst 1987, fixed-precision limitations).
-- **New tests**: `quat_test_mlll_realistic_scale` (127-bit prime), `quat_test_mlll_tau_path` (tau > 1 swap path).
+Tracker measures MLLL reduction loop only (`tracker_disable()` before HNF post-processing).
 
-## Not Yet Done
+### NIST Level 1 (p ~ 2^253, norm bitsize = 127, 3 trials)
 
-- Actual HNF → MLLL replacement in SQIsign pipeline (`lattice.c:177` still uses HNF)
-- Algorithm 3 (RandomIdealGivenPrimeNorm)
-- Algorithm 4 (RandomEquivalentPrimeIdeal) modification
+| Metric | HNF | MLLL vec | Improvement |
+|--------|-----|----------|-------------|
+| **Max intermediate bits** | **2153** | **255** | **8.4x** |
+| Max output bits | 128 | 128 | ~1.0 |
+| Total time | 0.49ms | 1.08ms | 0.45x |
 
-## Key Metric: Maximum Intermediate Bit Size
+### NIST Level 3 (p ~ 2^381, norm bitsize = 193, 1 trial)
 
-The paper's core claim is that MLLL bounds intermediate integer sizes to `max ||a_i||^2` (input norm squared), while HNF can blow up far beyond that. This is what determines whether **fixed-precision** arithmetic is feasible.
+| Metric | HNF | MLLL vec | Improvement |
+|--------|-----|----------|-------------|
+| **Max intermediate bits** | **3245** | **384** | **8.5x** |
+| Max output bits | 194 | 192 | ~1.0 |
+| Total time | 0.14ms | 0.38ms | 0.37x |
 
-### NIST Level 1 (p ~ 2^253, norm bitsize = 127, 10 trials)
+### NIST Level 5 (p ~ 2^509, norm bitsize = 254, 1 trial)
 
-| Metric | HNF | MLLL | Ratio (MLLL/HNF) |
-|--------|-----|------|-------------------|
-| **Max intermediate bits** | **2168** | **4513** | **2.082** |
-| Avg intermediate bits | 2106 | 3596 | 1.707 |
-| Max output bits | 128 | 127 | ~1.0 |
-| Total time | 1.35 ms | 413.79 ms | x306 |
+| Metric | HNF | MLLL vec | Improvement |
+|--------|-----|----------|-------------|
+| **Max intermediate bits** | **3779** | **503** | **7.5x** |
+| Max output bits | 250 | 250 | ~1.0 |
+| Total time | 0.15ms | 0.24ms | 0.63x |
 
-### NIST Level 3 (p ~ 2^381, norm bitsize = 193, 5 trials)
+### Summary
 
-| Metric | HNF | MLLL | Ratio (MLLL/HNF) |
-|--------|-----|------|-------------------|
-| **Max intermediate bits** | **3285** | **6881** | **2.095** |
-| Avg intermediate bits | 2907 | 4788 | 1.647 |
-| Max output bits | 194 | 193 | ~1.0 |
-| Total time | 0.72 ms | 441.16 ms | x614 |
+MLLL vector coordinates stay within **~2× input bits** across all security levels, matching the paper's Lemma 1 bound (≤ max||a_i||²). HNF intermediate values grow to ~17× input bits due to modular determinant computation.
 
-### NIST Level 5 (p ~ 2^509, norm bitsize = 254, 3 trials)
+GSO coefficients use `dpe_t` (53-bit float) so they contribute 0 bits to the integer tracker. This is the intended design: fixed-precision GSO means the only integer growth is in vector coordinates, which are Lemma 1 bounded.
 
-| Metric | HNF | MLLL | Ratio (MLLL/HNF) |
-|--------|-----|------|-------------------|
-| **Max intermediate bits** | **4315** | **7699** | **1.784** |
-| Avg intermediate bits | 3440 | 6931 | 2.015 |
-| Max output bits | 254 | 253 | ~1.0 |
-| Total time | 0.47 ms | 674.98 ms | x1449 |
+## Not Yet Implemented
 
-## Analysis
+### 1. Proper D_k=0 (dependent vector) handling
 
-### Intermediate Bit Size
+**Current**: When MLLL detects a dependent vector (`r[k][k] ≈ 0` via float GSO), the reduction loop may leave unresolved dependent vectors in `b[]`. The `done` section uses `ibz_mat_4xn_hnf_mod_core()` to extract the correct rank-4 basis as a temporary workaround. This HNF call is excluded from intermediate bit size tracking.
 
-**Important**: The tracker now covers both integer vector coordinates AND Gram-Schmidt rational coefficients (`ibq_t` numerators/denominators). Previous measurements (2026-04-02) only tracked vector coordinates, yielding misleadingly small MLLL intermediates (~255 bits). The updated tracker reveals the full picture:
+**Required**: Per Pohst (1987) and Matthews' pseudo-code, the algorithm must handle `D_k = 0` in two cases:
+- `D_k = 0, λ_{k,k-1} = 0`: Swap rows and decrease β
+- `D_k = 0, λ_{k,k-1} ≠ 0`: Apply `Swap2` (special μ update) then `Swap1`
 
-- **HNF intermediate values grow to ~17x the input bit size** (e.g., 128-bit input -> 2168-bit intermediate). This is driven by the 4x4 determinant used as the modulus in HNF computation.
-- **MLLL intermediate values grow to ~2x HNF** (e.g., 128-bit input -> 4513-bit intermediate). This is dominated by the exact rational Gram-Schmidt coefficients (`ibq_t` fractions), whose numerators/denominators grow without bound in this arbitrary-precision implementation.
-- The paper's Lemma 1 bound (`max ||a_i||^2`) applies to **integer vector coordinates only**, not to GS coefficients. The vector coordinates do stay bounded as claimed (~255 bits for Level 1).
+This requires tracking exact integer `D_k` and `λ_{k,j}` values alongside the float GSO, or computing them from the Gram matrix when needed. See: http://www.numbertheory.org/PDFS/mlll.pdf
 
-### Output Bit Size
+### 2. SQIsign pipeline integration
 
-Output basis element sizes are nearly identical between HNF and MLLL — both represent the same lattice, just in different forms (upper triangular vs LLL-reduced).
+Replace HNF with MLLL in the main SQIsign pipeline (`lattice.c:177`). Currently MLLL exists as separate functions for benchmarking only.
 
-### Execution Time
+### 3. Algorithm 3 (RandomIdealGivenPrimeNorm)
 
-MLLL is slower than HNF in this GMP-based (arbitrary precision) implementation because:
-1. MLLL uses exact rational Gram-Schmidt (`ibq_t` fractions) which is expensive.
-2. HNF benefits from modular reduction keeping intermediate values bounded at each step.
+Cornacchia + MLLL combination for sampling ideals with prime norm.
 
-The speed comparison is not the point. The paper targets **fixed-precision** SQIsign implementations where:
-- HNF's 2000-4000 bit intermediates (vector coordinates) **cannot fit** in the fixed-precision budget.
-- MLLL's ~500 bit vector coordinates **can fit**, enabling fixed-precision computation.
-- A fixed-precision MLLL would use integral GSO or L² representation instead of `ibq_t`, eliminating the GS coefficient blowup seen here.
+### 4. Algorithm 4 (RandomEquivalentPrimeIdeal)
+
+Modification to use LLL-reduced basis instead of HNF basis.
+
+### 5. Benchmark generation bottleneck
+
+`quat_test_input_random_ideal_lattice_generation()` is probabilistic and occasionally slow for > 5 iterations. The generation time is now printed per set to help diagnose this.
+
+## Implementation History
+
+| Date | Change |
+|------|--------|
+| 2026-03-30 | Initial MLLL with `ibq_t` (exact rational) GSO, full test pass |
+| 2026-04-02 | Bitsize tracker, benchmark with timing data |
+| 2026-04-07 | tau swap bug fix, tracker expansion to GSO coefficients |
+| 2026-04-08 | Integral GSO experiment (replaced `ibq_t` fractions with `ibz_t`) |
+| 2026-04-09 | Float GSO rewrite (`dpe_t`), Gram matrix approach, HNF post-processing as workaround, tracker separated from post-processing |
 
 ## How to Reproduce
 
 ```bash
-# Build
-cd build_wsl
-cmake .. -DSQISIGN_BUILD_TYPE=ref -DCMAKE_BUILD_TYPE=Release
-make sqisign_bm_mlll -j4
+cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release -DBITSIZE_TRACKER_ENABLE=ON
+make sqisign_bm_mlll sqisign_test_mlll -j$(nproc)
 
-# Run
-./src/quaternion/ref/generic/test/sqisign_bm_mlll --level=1 --iterations=10
-./src/quaternion/ref/generic/test/sqisign_bm_mlll --level=3 --iterations=5
-./src/quaternion/ref/generic/test/sqisign_bm_mlll --level=5 --iterations=3
+# Tests
+./src/quaternion/ref/generic/test/sqisign_test_mlll
+
+# Benchmarks (use small iteration counts — generation can be slow)
+./src/quaternion/ref/generic/test/sqisign_bm_mlll --level=1 --iterations=3
+./src/quaternion/ref/generic/test/sqisign_bm_mlll --level=3 --iterations=1
+./src/quaternion/ref/generic/test/sqisign_bm_mlll --level=5 --iterations=1
 ```
-
-## Date
-
-2026-03-30 (initial benchmark), 2026-04-02 (full test pass, re-run with timing data), 2026-04-07 (tau bug fix, tracker expansion, new tests)

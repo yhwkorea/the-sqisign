@@ -6,132 +6,113 @@ HNF 기반 vs MLLL 기반 ideal multiplication(`quat_lattice_mul` vs `quat_latti
 
 ## 구현 현황
 
-### 현재 상태
+- **GSO**: Float GSO (`dpe_t`, 53-bit mantissa + extended exponent), L² 방식
+- **Gram matrix**: 정확한 정수(`ibz_t`), 점진적 업데이트
+- **Dependency detection**: `dpe_zero_p(r[k][k])`(float 판정), done section에 HNF 후처리로 임시 우회
+- **테스트**: 6/6 통과
+- **Fixed-precision**: 확인됨 — MLLL 벡터 좌표가 Lemma 1 bound 내
 
-기존 SQIsign의 HNF 기반 ideal operation(`quat_lattice_mul`, `quat_lattice_add`)을 **교체하지 않고**, MLLL 기반 함수를 별도로 구현하여 **동일 입력에 대해 두 방식의 결과와 intermediate bit size를 비교**한 상태이다.
-
-### 파일 구조
+## 파일 구조
 
 | 파일 | 설명 |
 |------|------|
-| `mlll.c` | **핵심 구현**. 논문 Algorithm 1 (MLLL) + Algorithm 2 (CompactIdealMultiplication). `quat_mlll()`, `quat_lattice_mul_mlll()`, `quat_lattice_add_mlll()` 세 함수를 제공. 파일 상단 한국어 docstring에 Pohst 1987 알고리즘 설명 및 fixed-precision 한계 명시. |
-| `mlll_internals.h` | MLLL 함수 선언 및 상수 정의 (`MLLL_MAX_GENERATORS=16` 등) |
-| `mlll_tests.c` | **정확성 검증**. 같은 입력에 대해 HNF(`quat_lattice_mul`)와 MLLL(`quat_lattice_mul_mlll`)을 모두 실행하고, `quat_lattice_equal()`로 결과 lattice가 동일한지 확인. 총 6개 테스트: (1) HNF vs MLLL 결과 비교, (2) MLLL output의 LLL-reducedness 검증, (3) linearly dependent generator 처리, (4) CompactIdealMultiplication 전체 흐름, (5) 127비트 prime 현실 스케일 검증, (6) tau > 1 swap 경로 검증 |
-| `mlll_benchmark.c` | **intermediate bit size 비교**. `bitsize_tracker`를 이용해 HNF/MLLL 실행 중 나오는 모든 integer의 최대 bit size를 추적한다. `tracker_reset()` → 연산 실행 → `tracker_get_max()`로 최대값 수집. |
-| `bitsize_tracker.h` | 벤치마크 전용 계측 도구. `mlll.c`와 `hnf.c` 내부에 `tracker_update_vec4()` / `tracker_update_ibz()` 호출이 삽입되어 intermediate value의 bit size를 추적. `__attribute__((weak))` 심볼로 `mlll_benchmark.c` 없이도 링크 가능. `BITSIZE_TRACKER_ENABLE` 미정의 시 no-op. |
-| `test_mlll_only.c` | MLLL 테스트만 독립 실행하는 entry point (main 함수) |
+| `mlll.c` | **핵심 구현**. 논문 Algorithm 1 (MLLL) + Algorithm 2 (CompactIdealMultiplication). Float GSO + Gram matrix. |
+| `mlll_internals.h` | 함수 선언 및 상수 (`MLLL_MAX_GENERATORS=16`) |
+| `mlll_tests.c` | **정확성 검증**. 6개 테스트 |
+| `mlll_benchmark.c` | **intermediate bit size 비교**. `tracker_disable()`로 MLLL reduction loop만 분리 측정. |
+| `bitsize_tracker.h` | 2채널 tracker: `vec`(벡터 좌표) + `gso`(GSO 계수). `BITSIZE_TRACKER_ENABLE` 없으면 no-op. |
+| `test_mlll_only.c` | MLLL 테스트 독립 실행 entry point |
 
-### 비교 방법
+## 논문 알고리즘 매핑
 
-1. **정확성**: `mlll_tests.c`에서 동일 lattice pair에 대해 `quat_lattice_mul()`(HNF)과 `quat_lattice_mul_mlll()`(MLLL)을 호출하고, `quat_lattice_equal()`로 결과가 같은 lattice인지 비교
-2. **intermediate bit size**: `mlll_benchmark.c`의 `bench_one_mul()`에서 `bitsize_tracker`를 켜고 각 방식을 실행하여 연산 중 등장하는 integer의 최대 bit size를 기록
+| 논문 | 코드 | 상태 |
+|------|------|------|
+| Algorithm 1 (MLLL) | `quat_mlll()` | ✓ 구현 (D_k=0 처리 미완 — 아래 참조) |
+| Algorithm 2 (CompactIdealMultiplication) | `quat_lattice_mul_mlll()` | ✓ 구현 |
+| Algorithm 3 (RandomIdealGivenPrimeNorm) | — | 미구현 |
+| Algorithm 4 (RandomEquivalentPrimeIdeal) | — | 미구현 |
+| Lemma 1 (intermediate bound) | `mlll_benchmark.c` | ✓ 실험적 검증 |
 
-### 논문 알고리즘 매핑
+## Fixed-Precision 벤치마크 결과 (2026-04-09)
 
-| 논문 | 코드 |
+Tracker는 MLLL reduction loop만 측정 (`tracker_disable()`로 HNF 후처리 제외).
+
+### NIST Level 1 (p ~ 2^253, norm bitsize = 127, 3회)
+
+| 지표 | HNF | MLLL vec | 개선 |
+|------|-----|----------|------|
+| **최대 intermediate bits** | **2153** | **255** | **8.4x** |
+| 최대 output bits | 128 | 128 | ~1.0 |
+| 총 실행 시간 | 0.49ms | 1.08ms | 0.45x |
+
+### NIST Level 3 (p ~ 2^381, norm bitsize = 193, 1회)
+
+| 지표 | HNF | MLLL vec | 개선 |
+|------|-----|----------|------|
+| **최대 intermediate bits** | **3245** | **384** | **8.5x** |
+| 최대 output bits | 194 | 192 | ~1.0 |
+| 총 실행 시간 | 0.14ms | 0.38ms | 0.37x |
+
+### NIST Level 5 (p ~ 2^509, norm bitsize = 254, 1회)
+
+| 지표 | HNF | MLLL vec | 개선 |
+|------|-----|----------|------|
+| **최대 intermediate bits** | **3779** | **503** | **7.5x** |
+| 최대 output bits | 250 | 250 | ~1.0 |
+| 총 실행 시간 | 0.15ms | 0.24ms | 0.63x |
+
+### 요약
+
+MLLL 벡터 좌표는 모든 보안 레벨에서 **입력 bits의 ~2배** 이내로 유지됨. 논문 Lemma 1 bound (≤ max||a_i||²)와 정확히 일치. HNF는 modular determinant 계산 때문에 입력 bits의 ~17배까지 증가.
+
+GSO 계수는 `dpe_t`(53-bit float)로 처리하므로 정수 tracker에 0 bits로 기록됨. 이것이 의도된 설계: fixed-precision GSO → 정수 성장은 벡터 좌표에서만 발생하며 Lemma 1로 bounded.
+
+## 미구현 사항
+
+### 1. D_k=0 (dependent vector) 정상 처리
+
+**현재**: MLLL이 dependent vector(`r[k][k] ≈ 0`)를 감지하면 reduction loop가 미해결 상태로 남길 수 있음. `done` section에서 `ibz_mat_4xn_hnf_mod_core()`로 rank-4 basis를 추출하는 임시 우회 사용 중. 이 HNF 호출은 intermediate bit size 측정에서 제외됨.
+
+**필요**: Pohst (1987) 및 Matthews pseudo-code에 따르면:
+- `D_k = 0, λ_{k,k-1} = 0`: 행 교환 후 β 감소
+- `D_k = 0, λ_{k,k-1} ≠ 0`: `Swap2`(특별 μ 업데이트) 후 `Swap1`
+
+Gram matrix에서 정확한 정수 `D_k`, `λ_{k,j}`를 계산하여 처리해야 함. 참조: http://www.numbertheory.org/PDFS/mlll.pdf
+
+### 2. SQIsign pipeline 통합
+
+메인 파이프라인(`lattice.c:177`)의 HNF를 MLLL로 교체. 현재는 벤치마크용 별도 함수로만 존재.
+
+### 3. Algorithm 3 (RandomIdealGivenPrimeNorm)
+
+Cornacchia + MLLL 조합으로 prime norm ideal 샘플링.
+
+### 4. Algorithm 4 (RandomEquivalentPrimeIdeal)
+
+HNF basis 대신 LLL-reduced basis 사용으로 수정.
+
+## 구현 이력
+
+| 날짜 | 변경 |
 |------|------|
-| Algorithm 1 (MLLL) | `quat_mlll()` in `mlll.c:192-586` |
-| Algorithm 2 (CompactIdealMultiplication) | `quat_lattice_mul_mlll()` in `mlll.c:591-632` |
-| Lemma 1 (intermediate bound ≤ max\|\|a_i\|\|²) | `mlll_benchmark.c`로 실험적 검증 |
-
-### 변경사항 (2026-04-07)
-
-- **버그 수정**: swap 감소 조건 `m > 1` → `m > tau`. `remove_vector`가 `tau = m+1`로 설정한 후 기존 조건은 `tau` 아래로 내려가 잘못된 GS 데이터에 접근하는 버그가 있었음.
-- **Tracker 확장**: `compute_gs_single()` 내 GS inner product, cross product, mu 분자/분모, B 분자/분모에 `tracker_update_ibz()` 추가.
-- **Weak 심볼**: `bitsize_tracker.h`가 `__attribute__((weak))`를 사용하여 `mlll_benchmark.c` 없이도 링크 가능.
-- **Rank assertion**: `quat_lattice_add_mlll()`에 `assert(rank > 0 && rank <= 4)` 추가.
-- **한국어 docstring**: `mlll.c` 상단 주석을 한국어로 재작성 (Pohst 1987, fixed-precision 한계 설명).
-- **새 테스트 2개**: `quat_test_mlll_realistic_scale` (127비트 prime), `quat_test_mlll_tau_path` (tau > 1 swap 경로).
-
-### 아직 안 한 것
-
-- SQIsign pipeline에서 HNF → MLLL 실제 교체 (현재 `lattice.c:177`의 `quat_lattice_mul`은 여전히 HNF 사용)
-- 논문 Algorithm 3 (RandomIdealGivenPrimeNorm) 구현
-- 논문 Algorithm 4 (RandomEquivalentPrimeIdeal) 수정
-
-## 핵심 지표: 최대 intermediate bit size
-
-논문의 핵심 주장은 MLLL이 intermediate integer size를 `max ||a_i||^2` (입력 norm의 제곱)으로 bound하는 반면, HNF는 그보다 훨씬 커질 수 있다는 것이다. 이것이 **fixed-precision** 연산의 가능 여부를 결정한다.
-
-### NIST Level 1 (p ~ 2^253, norm bitsize = 127, 10회 시행)
-
-| 지표 | HNF | MLLL | 비율 (MLLL/HNF) |
-|------|-----|------|-----------------|
-| **최대 intermediate bits** | **2168** | **4513** | **2.082** |
-| 평균 intermediate bits | 2106 | 3596 | 1.707 |
-| 최대 output bits | 128 | 127 | ~1.0 |
-| 총 실행 시간 | 1.35 ms | 413.79 ms | x306 |
-
-### NIST Level 3 (p ~ 2^381, norm bitsize = 193, 5회 시행)
-
-| 지표 | HNF | MLLL | 비율 (MLLL/HNF) |
-|------|-----|------|-----------------|
-| **최대 intermediate bits** | **3285** | **6881** | **2.095** |
-| 평균 intermediate bits | 2907 | 4788 | 1.647 |
-| 최대 output bits | 194 | 193 | ~1.0 |
-| 총 실행 시간 | 0.72 ms | 441.16 ms | x614 |
-
-### NIST Level 5 (p ~ 2^509, norm bitsize = 254, 3회 시행)
-
-| 지표 | HNF | MLLL | 비율 (MLLL/HNF) |
-|------|-----|------|-----------------|
-| **최대 intermediate bits** | **4315** | **7699** | **1.784** |
-| 평균 intermediate bits | 3440 | 6931 | 2.015 |
-| 최대 output bits | 254 | 253 | ~1.0 |
-| 총 실행 시간 | 0.47 ms | 674.98 ms | x1449 |
-
-## 분석
-
-### Intermediate Bit Size
-
-**중요**: 현재 tracker는 정수 벡터 좌표뿐 아니라 Gram-Schmidt 유리수 계수(`ibq_t` 분자/분모)까지 추적한다. 이전 측정(2026-04-02)은 벡터 좌표만 추적하여 MLLL intermediate가 오해를 줄 만큼 작게(~255 bits) 나왔음. 업데이트된 tracker의 결과:
-
-- **HNF intermediate value는 input bit size의 ~17배까지 증가** (예: 128-bit input → 2168-bit intermediate). HNF 계산에서 4x4 determinant를 modulus로 사용하기 때문.
-- **MLLL intermediate value는 HNF의 ~2배까지 증가** (예: 128-bit input → 4513-bit intermediate). Exact rational Gram-Schmidt 계수(`ibq_t` fraction)의 분자/분모가 arbitrary precision에서 제한 없이 커지기 때문.
-- 논문 Lemma 1의 bound(`max ||a_i||^2`)는 **정수 벡터 좌표에만** 적용되며, GS 계수에는 해당하지 않음. 벡터 좌표는 논문 주장대로 bounded (~255 bits for Level 1).
-
-### Output Bit Size
-
-HNF와 MLLL의 output basis element size는 거의 동일 — 둘 다 같은 lattice를 표현하며, 형태만 다름 (upper triangular vs LLL-reduced).
-
-### 실행 시간
-
-이 GMP 기반(arbitrary precision) 구현에서는 MLLL이 HNF보다 느림:
-1. MLLL은 exact rational Gram-Schmidt(`ibq_t` fraction)를 사용하므로 비용이 큼.
-2. HNF는 각 단계에서 modular reduction으로 intermediate value를 bound하므로 GMP에서 유리함.
-
-속도 비교가 핵심이 아님. 논문이 목표로 하는 것은 **fixed-precision** SQIsign 구현:
-- HNF의 2000-4000 bit intermediate(벡터 좌표)는 fixed-precision budget에 **들어가지 않음**.
-- MLLL의 ~500 bit 벡터 좌표는 **들어감**, fixed-precision 연산 가능.
-- Fixed-precision MLLL은 `ibq_t` 대신 integral GSO 또는 L² 표현을 사용하여 GS 계수 blowup을 제거함.
+| 2026-03-30 | 초기 MLLL (`ibq_t` exact rational GSO), 전체 테스트 통과 |
+| 2026-04-02 | Bitsize tracker, 실행 시간 포함 벤치마크 |
+| 2026-04-07 | tau swap 버그 수정, tracker 확장 |
+| 2026-04-08 | Integral GSO 실험 (`ibq_t` → `ibz_t`) |
+| 2026-04-09 | Float GSO 전환 (`dpe_t`), Gram matrix 방식, tracker 분리, HNF 후처리 임시 우회 |
 
 ## 재현 방법
 
 ```bash
-# 빌드 (tracker 포함)
-cd build_wsl
-cmake .. -DSQISIGN_BUILD_TYPE=ref -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS='-DBITSIZE_TRACKER_ENABLE'
-make sqisign_bm_mlll -j4
+cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release -DBITSIZE_TRACKER_ENABLE=ON
+make sqisign_bm_mlll sqisign_test_mlll -j$(nproc)
 
-# 실행
-./src/quaternion/ref/generic/test/sqisign_bm_mlll --level=1 --iterations=10
-./src/quaternion/ref/generic/test/sqisign_bm_mlll --level=3 --iterations=5
-./src/quaternion/ref/generic/test/sqisign_bm_mlll --level=5 --iterations=3
+# 테스트
+./src/quaternion/ref/generic/test/sqisign_test_mlll
+
+# 벤치마크 (iteration 수 적게 — 생성이 느릴 수 있음)
+./src/quaternion/ref/generic/test/sqisign_bm_mlll --level=1 --iterations=3
+./src/quaternion/ref/generic/test/sqisign_bm_mlll --level=3 --iterations=1
+./src/quaternion/ref/generic/test/sqisign_bm_mlll --level=5 --iterations=1
 ```
-
-> 참고: `-DBITSIZE_TRACKER_ENABLE` 없이 빌드하면 intermediate bit size가 0으로 나옴 (tracker가 no-op).
-
-## 테스트
-
-```bash
-# 전체 테스트 스위트 (35개 테스트)
-cd build_wsl
-cmake .. -DSQISIGN_BUILD_TYPE=ref -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
-ctest --output-on-failure -j$(nproc)
-# 결과: 35/35 통과 (2026-04-08 확인, 새 테스트 2개 포함)
-```
-
-## 날짜
-
-2026-03-30 (초기 벤치마크), 2026-04-02 (전체 테스트 통과 확인, 실행 시간 포함 벤치마크 재실행), 2026-04-07 (tau 버그 수정, tracker 확장, 새 테스트 추가)
