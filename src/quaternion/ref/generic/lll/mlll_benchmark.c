@@ -24,9 +24,7 @@
 #include "quaternion_tests.h"
 #include <rng.h>
 
-/* Global tracker state */
-int _bitsize_tracker_max = 0;
-int _bitsize_tracker_enabled = 0;
+/* Global tracker state — provided by weak symbols in bitsize_tracker.h */
 
 /* ---------- helpers ---------- */
 

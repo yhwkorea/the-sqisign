@@ -13,9 +13,16 @@
 #include <quaternion.h>
 
 #ifdef BITSIZE_TRACKER_ENABLE
-/* Global tracker state (not thread-safe, but fine for benchmarks) */
+/* Global tracker state (not thread-safe, but fine for benchmarks).
+ * Defined as weak so that any TU can link without a separate definition.
+ * mlll_benchmark.c provides strong definitions when present. */
+#ifdef __GNUC__
+__attribute__((weak)) int _bitsize_tracker_max = 0;
+__attribute__((weak)) int _bitsize_tracker_enabled = 0;
+#else
 extern int _bitsize_tracker_max;
 extern int _bitsize_tracker_enabled;
+#endif
 
 static inline void tracker_reset(void) {
     _bitsize_tracker_max = 0;

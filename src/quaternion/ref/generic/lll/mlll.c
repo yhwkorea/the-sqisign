@@ -1,10 +1,17 @@
 /**
  * @file mlll.c
- * @brief Modified LLL algorithm (Pohst 1987)
+ * @brief Modified LLL (MLLL) 알고리즘 구현 (Pohst 1987)
  *
- * Implementation of the MLLL algorithm that takes a generating set
- * (possibly linearly dependent) and produces an LLL-reduced basis.
- * Uses exact rational arithmetic (ibq_t) for Gram-Schmidt coefficients.
+ * 격자(lattice)의 생성 집합(generating set)을 입력받아 LLL-reduced basis를 출력한다.
+ * 일반 LLL과 달리, 입력 벡터가 선형 종속(linearly dependent)이어도 동작하며,
+ * 자동으로 종속 벡터를 제거하고 독립인 basis만 반환한다.
+ *
+ * Gram-Schmidt 계수는 정확한 유리수 연산(ibq_t = 분자/분모)으로 계산한다.
+ *
+ * 핵심 가치: 정수 벡터 좌표의 중간값 비트 크기가 max||a_i||^2 으로 바운드됨 (Lemma 1).
+ * 단, 현재 구현은 GS 계수를 arbitrary precision rational(ibq_t)로 처리하므로
+ * fixed-precision 구현은 아님. Fixed-precision MLLL을 위해서는 integral GSO 또는
+ * L² 방식의 정수 GS 표현이 별도로 필요함.
  *
  * Reference:
  *   M. Pohst, "A modification of the LLL reduction algorithm",
@@ -132,6 +139,7 @@ compute_gs_single(int idx,
 
     /* B[idx] = <b_idx, b_idx>_quat */
     ibz_vec_4_dot_quat(&dot_val, &b[idx], &b[idx], p);
+    tracker_update_ibz(&dot_val); /* track inner product */
     ibq_set(&B[idx], &dot_val, &ibz_const_one);
 
     for (int j = 0; j < idx; j++) {
@@ -143,6 +151,7 @@ compute_gs_single(int idx,
 
         /* Numerator = <b_idx, b_j> - sum_{k<j} mu[idx][k]*mu[j][k]*B[k] */
         ibz_vec_4_dot_quat(&dot_val, &b[idx], &b[j], p);
+        tracker_update_ibz(&dot_val); /* track cross inner product */
         ibq_set(&dot_q, &dot_val, &ibz_const_one);
 
         for (int k = 0; k < j; k++) {
@@ -152,17 +161,23 @@ compute_gs_single(int idx,
             ibq_mul(&prod_q, &prod_q, &B[k]);
             ibq_sub(&dot_q, &dot_q, &prod_q);
         }
+        tracker_update_ibz(&dot_q[0]); /* track accumulated numerator */
+        tracker_update_ibz(&dot_q[1]); /* track accumulated denominator */
 
         /* mu[idx][j] = numerator / B[j] */
         ibq_inv(&Binv, &B[j]);
         ibq_mul(&mu[idx][j], &dot_q, &Binv);
         ibq_reduce(&mu[idx][j]);
+        tracker_update_ibz(&mu[idx][j][0]); /* track mu numerator */
+        tracker_update_ibz(&mu[idx][j][1]); /* track mu denominator */
 
         /* B[idx] -= mu[idx][j]^2 * B[j] */
         ibq_mul(&prod_q, &mu[idx][j], &mu[idx][j]);
         ibq_mul(&prod_q, &prod_q, &B[j]);
         ibq_sub(&B[idx], &B[idx], &prod_q);
         ibq_reduce(&B[idx]);
+        tracker_update_ibz(&B[idx][0]); /* track B numerator */
+        tracker_update_ibz(&B[idx][1]); /* track B denominator */
     }
 
     ibz_finalize(&dot_val);
@@ -393,7 +408,7 @@ do_swap:
             ibq_finalize(&mu_old);
             ibq_finalize(&B_new);
 
-            if (m > 1)
+            if (m > tau)
                 m--;
             goto reduction;
         }
@@ -420,8 +435,8 @@ do_swap:
         ibq_finalize(&B_new);
     }
 
-    /* Paper line 22: if m > 1 (0-based), decrement */
-    if (m > 1)
+    /* Paper line 22: if m > τ, decrement */
+    if (m > tau)
         m--;
     goto reduction;
 
@@ -642,6 +657,7 @@ quat_lattice_add_mlll(quat_lattice_t *res,
             ibz_copy(&(generators[4 + j][i]), &(tmp[i][j]));
 
     quat_mlll(&(res->basis), &rank, generators, 8, alg);
+    assert(rank > 0 && rank <= 4);
 
     ibz_mul(&(res->denom), &(lat1->denom), &(lat2->denom));
     quat_lattice_reduce_denom(res, res);

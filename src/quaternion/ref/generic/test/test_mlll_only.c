@@ -29,5 +29,17 @@ int main(void)
     printf("compact_ideal_multiplication done (res=%d)\n", res);
     fflush(stdout);
 
+    printf("Starting MLLL test: realistic_scale...\n");
+    fflush(stdout);
+    res |= quat_test_mlll_realistic_scale();
+    printf("realistic_scale done (res=%d)\n", res);
+    fflush(stdout);
+
+    printf("Starting MLLL test: tau_path...\n");
+    fflush(stdout);
+    res |= quat_test_mlll_tau_path();
+    printf("tau_path done (res=%d)\n", res);
+    fflush(stdout);
+
     return res;
 }
