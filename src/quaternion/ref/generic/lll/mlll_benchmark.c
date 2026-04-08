@@ -66,6 +66,8 @@ bench_one_mul(const quat_lattice_t *lat1,
               int *mlll_out_bits,
               int *hnf_inter_bits,
               int *mlll_inter_bits,
+              int *mlll_vec_bits,
+              int *mlll_gso_bits,
               int *input_bits,
               double *hnf_time_ms,
               double *mlll_time_ms)
@@ -95,6 +97,8 @@ bench_one_mul(const quat_lattice_t *lat1,
     *mlll_time_ms = (double)(t1 - t0) * 1000.0 / CLOCKS_PER_SEC;
     *mlll_out_bits = lattice_max_bitsize(&prod_mlll);
     *mlll_inter_bits = tracker_get_max();
+    *mlll_vec_bits = tracker_get_vec_max();
+    *mlll_gso_bits = tracker_get_gso_max();
     tracker_disable();
 
     quat_lattice_finalize(&prod_hnf);
@@ -169,8 +173,14 @@ main(int argc, char *argv[])
     }
 
     printf("Generating %d random ideal lattice pairs (bitsize=%d)...\n", iterations, norm_bitsize);
+    clock_t gen_t0 = clock();
     int ret1 = quat_test_input_random_ideal_lattice_generation(lats1, norms1, norm_bitsize, iterations, &params);
+    clock_t gen_t1 = clock();
+    printf("  Set 1: %.2f ms\n", (double)(gen_t1 - gen_t0) * 1000.0 / CLOCKS_PER_SEC);
+    gen_t0 = clock();
     int ret2 = quat_test_input_random_ideal_lattice_generation(lats2, norms2, norm_bitsize, iterations, &params);
+    gen_t1 = clock();
+    printf("  Set 2: %.2f ms\n", (double)(gen_t1 - gen_t0) * 1000.0 / CLOCKS_PER_SEC);
     if (ret1 || ret2) {
         printf("ERROR: random lattice generation failed\n");
         return 1;
@@ -178,53 +188,66 @@ main(int argc, char *argv[])
     printf("Generation done.\n\n");
 
     /* Column headers */
-    printf("%-5s | %5s | %12s %12s | %12s %12s | %8s %8s\n",
-           "Trial", "Input", "HNF inter", "MLLL inter", "HNF out", "MLLL out", "HNF ms", "MLLL ms");
-    printf("------+-------+---------------------------+---------------------------+-------------------\n");
+    printf("%-5s | %5s | %8s | %8s %8s %8s | %8s %8s | %8s %8s\n",
+           "Trial", "Input", "HNF int",
+           "MLLL tot", "MLLL vec", "MLLL gso",
+           "HNF out", "MLLL out", "HNF ms", "MLLL ms");
+    printf("------+-------+----------+-----------------------------+-------------------+-------------------\n");
 
     long sum_hnf_inter = 0, sum_mlll_inter = 0;
+    long sum_mlll_vec = 0, sum_mlll_gso = 0;
     long sum_hnf_out = 0, sum_mlll_out = 0;
     int max_hnf_inter = 0, max_mlll_inter = 0;
+    int max_mlll_vec = 0, max_mlll_gso = 0;
     int max_hnf_out = 0, max_mlll_out = 0;
     double total_hnf_ms = 0, total_mlll_ms = 0;
 
     for (int i = 0; i < iterations; i++) {
-        int hnf_out, mlll_out, hnf_inter, mlll_inter, input_bits;
+        int hnf_out, mlll_out, hnf_inter, mlll_inter, mlll_vec, mlll_gso, input_bits;
         double hnf_ms, mlll_ms;
 
         bench_one_mul(&lats1[i], &lats2[i], &alg,
                       &hnf_out, &mlll_out,
                       &hnf_inter, &mlll_inter,
+                      &mlll_vec, &mlll_gso,
                       &input_bits,
                       &hnf_ms, &mlll_ms);
 
-        printf("%-5d | %5d | %12d %12d | %12d %12d | %8.2f %8.2f\n",
-               i, input_bits, hnf_inter, mlll_inter, hnf_out, mlll_out, hnf_ms, mlll_ms);
+        printf("%-5d | %5d | %8d | %8d %8d %8d | %8d %8d | %8.2f %8.2f\n",
+               i, input_bits, hnf_inter,
+               mlll_inter, mlll_vec, mlll_gso,
+               hnf_out, mlll_out, hnf_ms, mlll_ms);
 
         sum_hnf_inter += hnf_inter;
         sum_mlll_inter += mlll_inter;
+        sum_mlll_vec += mlll_vec;
+        sum_mlll_gso += mlll_gso;
         sum_hnf_out += hnf_out;
         sum_mlll_out += mlll_out;
         if (hnf_inter > max_hnf_inter) max_hnf_inter = hnf_inter;
         if (mlll_inter > max_mlll_inter) max_mlll_inter = mlll_inter;
+        if (mlll_vec > max_mlll_vec) max_mlll_vec = mlll_vec;
+        if (mlll_gso > max_mlll_gso) max_mlll_gso = mlll_gso;
         if (hnf_out > max_hnf_out) max_hnf_out = hnf_out;
         if (mlll_out > max_mlll_out) max_mlll_out = mlll_out;
         total_hnf_ms += hnf_ms;
         total_mlll_ms += mlll_ms;
     }
 
-    printf("------+-------+---------------------------+---------------------------+-------------------\n");
-    printf("\n=== Summary (Intermediate = max bit size during computation) ===\n");
-    printf("Avg intermediate bits:  HNF=%ld  MLLL=%ld  (MLLL/HNF=%.3f)\n",
-           sum_hnf_inter / iterations, sum_mlll_inter / iterations,
-           sum_hnf_inter > 0 ? (double)sum_mlll_inter / sum_hnf_inter : 0.0);
-    printf("Max intermediate bits:  HNF=%d  MLLL=%d  (MLLL/HNF=%.3f)\n",
-           max_hnf_inter, max_mlll_inter,
-           max_hnf_inter > 0 ? (double)max_mlll_inter / max_hnf_inter : 0.0);
-    printf("Avg output bits:        HNF=%ld  MLLL=%ld\n",
-           sum_hnf_out / iterations, sum_mlll_out / iterations);
-    printf("Max output bits:        HNF=%d  MLLL=%d\n", max_hnf_out, max_mlll_out);
-    printf("Total time:             HNF=%.2fms  MLLL=%.2fms  (MLLL/HNF=%.1f)\n",
+    printf("------+-------+----------+-----------------------------+-------------------+-------------------\n");
+    printf("\n=== Summary ===\n");
+    printf("HNF  intermediate:  avg=%ld  max=%d\n",
+           sum_hnf_inter / iterations, max_hnf_inter);
+    printf("MLLL total:         avg=%ld  max=%d\n",
+           sum_mlll_inter / iterations, max_mlll_inter);
+    printf("MLLL vec coords:    avg=%ld  max=%d  (Lemma 1 bounded)\n",
+           sum_mlll_vec / iterations, max_mlll_vec);
+    printf("MLLL GSO coeffs:    avg=%ld  max=%d  (integral GSO overhead)\n",
+           sum_mlll_gso / iterations, max_mlll_gso);
+    printf("Output bits:        HNF avg=%ld max=%d  MLLL avg=%ld max=%d\n",
+           sum_hnf_out / iterations, max_hnf_out,
+           sum_mlll_out / iterations, max_mlll_out);
+    printf("Total time:         HNF=%.2fms  MLLL=%.2fms  (MLLL/HNF=%.1f)\n",
            total_hnf_ms, total_mlll_ms,
            total_hnf_ms > 0 ? total_mlll_ms / total_hnf_ms : 0.0);
 
