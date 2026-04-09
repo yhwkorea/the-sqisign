@@ -25,6 +25,48 @@ For MLLL, `||a_i||^2 = nrd(r1*alpha_s * r2*beta_t)` where alpha, beta are basis 
 - MLLL intermediate ≈ `r1^2 * r2^2 * max_s(nrd(alpha_s)) * max_t(nrd(beta_t))`
 - This is **quadratically smaller** than the Modified HNF bound (which squares m)
 
+### Role of nrd(I) in the Bound
+
+The paper's bounds are fundamentally expressed in terms of **reduced norms** `nrd(I)` of the input ideals.
+
+**Lemma 12** (Modified IdealMul bound): intermediate ≤ `r1^8 * r2^8 * nrd(I1)^4 * nrd(I2)^4`
+
+where:
+- `nrd(I)` = reduced norm of ideal I = gcd{nrd(α) | α ∈ I}
+- `r_i` = lcm of denominators of basis elements (Lemma 5: `r_α ≤ 2*nrd(connecting_ideal)`)
+
+**How nrd(I) determines intermediate size**: The modulus m = nrd(r1·I1)^2 · nrd(r2·I2)^2 = r1^4·r2^4·nrd(I1)^2·nrd(I2)^2. HNF over Z_m produces intermediates ≤ m^2. So intermediates grow as **4th power of nrd(I)**.
+
+**Composition through the pipeline** (how nrd(I) propagates):
+
+| Subroutine | Ideal involved | nrd bound | Bound derivation |
+|-----------|---------------|-----------|-----------------|
+| KeyGen Line 2 | I_sk (secret) | nrd(I_sk) ≤ D_mix ≈ 2^(8λ) | RandomIdealGivenNorm (Alg. 6) |
+| KeyGen Line 4 | I_sk (re-sampled) | nrd(I_sk) ≤ p (hypothesis) | RandomEquivalentPrimeIdeal |
+| KeyGen Line 5 | J_t · I_sk | nrd(J_t) < (log p)^2 | IdealToIsogeny → SuitableIdeals |
+| Sign Line 13 | [I_sk]* I'_chl | nrd ≤ nrd(I_sk)·nrd(I'_chl) ≤ p·2^f | Lemma 9, 10 |
+| Sign Line 14 | I_sk · I_chl | nrd(I_chl) = nrd(I'_chl) ≤ 2^f | Lemma 12 applied |
+| Sign Line 24 | I_com,rsp ∩ I_aux | nrd ≤ q_rsp·D_mix · √p | Lemma 9 |
+
+**Theorem 1** (Modified KeyGen): All nrd(I) ≤ p, so Lemma 12 gives ≤ r^8 · p^4. With r ≤ 2·nrd ≤ 2p, total ≤ 2^8·p^8·p^4 ... but the dominant term comes from SuitableIdeals (Lemma 13): `2^16·(log p)^16·nrd(I_sk)^4 ≤ 2^16·(log p)^16·p^4`. The overall KeyGen bound 2^68·p^9 is dominated by RandomIdealGivenNorm: `32·p·D_mix^2 ≈ 2^68·p^9`.
+
+**Theorem 2** (Modified Sign): The worst case is Sign Line 13 where nrd(I_sk)^20·nrd(I'_chl)^4 ≤ p^20·2^(4f) ≤ p^24·p^4 = p^28. With constant factor 2^16, total = **2^16·p^28**.
+
+**For MLLL**: Our approach avoids m^2 entirely, so nrd(I) affects intermediates only through the generator norms (Lemma 1), not through the modulus. The MLLL intermediate for one IdealMul call is:
+
+```
+MLLL intermediate ≤ max_s,t { nrd(r1·α_s · r2·β_t) }
+                  = max { r1^2·r2^2 · nrd(α_s) · nrd(β_t) }
+```
+
+Since nrd(α_s) ≤ 8·nrd(I) for LLL-reduced bases (Minkowski bound), this gives:
+
+```
+MLLL intermediate ≤ 64 · r1^2 · r2^2 · nrd(I1) · nrd(I2)
+```
+
+This is the **square root** of the Modified HNF bound (Lemma 12: r^8·nrd^4 vs r^4·nrd^2 for MLLL generator norms). This explains why our measured bits (~389 for L1) are much smaller than the HNF theoretical bound.
+
 ### Experimental Verification
 
 | Level | Input bits | MLLL vec | Modified HNF (Lemma 12) | Original HNF (measured) |

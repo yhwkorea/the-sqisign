@@ -22,6 +22,47 @@
 
 MLLL은 modulus를 사용하지 않으므로 m^2 blowup이 없음. 중간값은 generator의 norm에 비례하며, 이는 수정 HNF bound보다 **이차적으로 작음**.
 
+### nrd(I)의 역할
+
+논문의 bound는 근본적으로 입력 ideal의 **reduced norm** `nrd(I)`로 표현됩니다.
+
+**Lemma 12** (Modified IdealMul bound): 중간값 ≤ `r1^8 * r2^8 * nrd(I1)^4 * nrd(I2)^4`
+
+- `nrd(I)` = ideal I의 reduced norm = gcd{nrd(α) | α ∈ I}
+- `r_i` = basis 원소 분모의 lcm (Lemma 5: `r_α ≤ 2*nrd(connecting_ideal)`)
+
+**nrd(I)가 중간값 크기를 결정하는 방식**: modulus m = nrd(r1·I1)^2·nrd(r2·I2)^2. HNF over Z_m의 중간값 ≤ m^2. 따라서 중간값은 **nrd(I)의 4제곱**에 비례.
+
+**파이프라인 합성** (nrd(I)가 전파되는 과정):
+
+| 서브루틴 | 관련 Ideal | nrd bound | 유도 |
+|---------|-----------|-----------|------|
+| KeyGen Line 2 | I_sk (비밀) | nrd(I_sk) ≤ D_mix ≈ 2^(8λ) | RandomIdealGivenNorm (Alg. 6) |
+| KeyGen Line 4 | I_sk (재샘플링) | nrd(I_sk) ≤ p (가설) | RandomEquivalentPrimeIdeal |
+| KeyGen Line 5 | J_t · I_sk | nrd(J_t) < (log p)^2 | IdealToIsogeny → SuitableIdeals |
+| Sign Line 13 | [I_sk]* I'_chl | nrd ≤ nrd(I_sk)·nrd(I'_chl) ≤ p·2^f | Lemma 9, 10 |
+| Sign Line 14 | I_sk · I_chl | nrd(I_chl) = nrd(I'_chl) ≤ 2^f | Lemma 12 적용 |
+| Sign Line 24 | I_com,rsp ∩ I_aux | nrd ≤ q_rsp·D_mix · √p | Lemma 9 |
+
+**Theorem 1** (Modified KeyGen): 모든 nrd(I) ≤ p이므로, Lemma 12에 의해 ≤ r^8·p^4. 전체 KeyGen bound 2^68·p^9은 RandomIdealGivenNorm의 `32·p·D_mix^2 ≈ 2^68·p^9`이 지배항.
+
+**Theorem 2** (Modified Sign): 최악의 경우는 Sign Line 13에서 nrd(I_sk)^20·nrd(I'_chl)^4 ≤ p^20·2^(4f) ≤ p^28. 상수 포함 = **2^16·p^28**.
+
+**MLLL의 경우**: m^2를 사용하지 않으므로, nrd(I)는 generator norm을 통해서만 중간값에 영향:
+
+```
+MLLL 중간값 ≤ max_s,t { nrd(r1·α_s · r2·β_t) }
+             = max { r1^2·r2^2 · nrd(α_s) · nrd(β_t) }
+```
+
+LLL-reduced basis에서 nrd(α_s) ≤ 8·nrd(I) (Minkowski bound)이므로:
+
+```
+MLLL 중간값 ≤ 64 · r1^2 · r2^2 · nrd(I1) · nrd(I2)
+```
+
+이는 Modified HNF bound의 **제곱근** (Lemma 12: r^8·nrd^4 vs MLLL: r^4·nrd^2). L1 실측 389 bits가 HNF 이론 bound보다 훨씬 작은 이유.
+
 ### 실험적 검증
 
 | Level | 입력 bits | MLLL vec | 수정 HNF (Lemma 12) | 원본 HNF (실측) |
