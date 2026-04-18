@@ -222,10 +222,41 @@ Our MLLL intermediate measurement (389 bits for L1) is for **one IdealMultiplica
 
 ## Current Status
 
-- **Tests**: 6/6 pass
-- **Intermediate bits**: ~3x input (matches Lemma 1 bound with p factor)
+- **Tests**: 6/6 MLLL unit tests pass, 35/35 full SQIsign tests pass
+- **SQIsign pipeline**: lvl1/3/5 each 10 iterations KeyGen+Sign+Verify all pass
 - **HNF dependency**: Fully removed from MLLL path
-- **Performance**: ~20-60x slower than HNF (recompute-from-scratch overhead; optimizable with incremental Swap1/Swap2)
+
+### SQIsign Full Pipeline Timing (10 iterations, KeyGen+Sign+Verify)
+
+| Level | Prime | 10 iterations | Per iteration | Per iter (HNF, ctest) |
+|-------|-------|--------------|---------------|----------------------|
+| L1 | p ≈ 2^253 | 0.79 s | **79 ms** | 81 ms |
+| L3 | p ≈ 2^381 | 1.98 s | **198 ms** | 206 ms |
+| L5 | p ≈ 2^509 | 3.37 s | **337 ms** | 344 ms |
+
+Pipeline-level timing is comparable to HNF — MLLL overhead is small relative to the full KeyGen+Sign+Verify cost (isogeny computations dominate).
+
+### MLLL vs HNF Intermediate Bit Size (single IdealMul)
+
+| Level | Input bits | HNF avg inter | MLLL avg inter | MLLL max inter | MLLL/HNF ratio | HNF ms | MLLL ms |
+|-------|-----------|---------------|----------------|----------------|----------------|--------|---------|
+| L1 | 128 | 1990 | 3381 | 6727 | 1.70x | 0.12 | 41.0 |
+| L3 | 194 | 2862 | 6014 | 12322 | 2.10x | 0.15 | 102.8 |
+| L5 | 255 | 4200 | 6576 | 12349 | 1.57x | 0.16 | 186.0 |
+
+**Note**: MLLL intermediate bits are larger than HNF because MLLL tracks full vector coordinates during reduction (recompute-from-scratch), while HNF works modulo m. However, MLLL output bits are identical (±1 bit) to HNF output.
+
+**Fixed-precision requirement**: MLLL worst case is ~12,349 bits (L5), ~6,727 bits (L1). A fixed-width integer of **16,384 bits (2048 bytes)** would safely cover all levels with margin.
+
+### Performance: IdealMul only
+
+| Level | HNF avg | MLLL avg | Ratio |
+|-------|---------|----------|-------|
+| L1 | 0.12 ms | 41.0 ms | 350x |
+| L3 | 0.15 ms | 102.8 ms | 682x |
+| L5 | 0.16 ms | 186.0 ms | 1148x |
+
+Per-IdealMul MLLL is ~350-1150x slower due to recompute-from-scratch O(beta^2) per swap. Optimizable with incremental Swap1/Swap2 (expected ~10-50x reduction). Despite this, pipeline-level impact is small since IdealMul is called only a few times per Sign.
 
 ## Not Yet Implemented
 

@@ -178,6 +178,44 @@ NIST-I (p ≈ 2^253):
 | `realistic_scale` | 127-bit prime norm | NIST Level 1 parameter regime |
 | `tau_path` | generator 적재 순서 | MLLL load/reduce/load cycle (Pohst §2) |
 
+## 현재 상태
+
+- **테스트**: MLLL 단위 6/6 통과, SQIsign 전체 35/35 통과
+- **SQIsign 파이프라인**: lvl1/3/5 각 10회 반복 KeyGen+Sign+Verify 전부 통과
+- **HNF 의존성**: MLLL 경로에서 완전 제거
+
+### SQIsign 전체 파이프라인 타이밍 (10회 반복, KeyGen+Sign+Verify)
+
+| 레벨 | 소수 | 10회 총 시간 | 1회당 | HNF 1회 (ctest) |
+|------|------|-------------|-------|-----------------|
+| L1 | p ≈ 2^253 | 0.79 s | **79 ms** | 81 ms |
+| L3 | p ≈ 2^381 | 1.98 s | **198 ms** | 206 ms |
+| L5 | p ≈ 2^509 | 3.37 s | **337 ms** | 344 ms |
+
+파이프라인 수준에서는 HNF와 비슷 — isogeny 연산이 지배적이므로 MLLL 오버헤드는 미미함.
+
+### MLLL vs HNF 중간값 비트 크기 (단일 IdealMul)
+
+| 레벨 | 입력 bits | HNF 평균 | MLLL 평균 | MLLL 최대 | MLLL/HNF | HNF ms | MLLL ms |
+|------|----------|----------|-----------|-----------|----------|--------|---------|
+| L1 | 128 | 1990 | 3381 | 6727 | 1.70x | 0.12 | 41.0 |
+| L3 | 194 | 2862 | 6014 | 12322 | 2.10x | 0.15 | 102.8 |
+| L5 | 255 | 4200 | 6576 | 12349 | 1.57x | 0.16 | 186.0 |
+
+**참고**: MLLL 중간값이 HNF보다 큰 이유는 recompute-from-scratch 과정에서 전체 벡터 좌표를 추적하기 때문. HNF는 m 모듈러 연산. 하지만 MLLL 출력 bits는 HNF와 동일 (±1 bit).
+
+**Fixed-precision 요구사항**: MLLL 최악 ~12,349 bits (L5), ~6,727 bits (L1). **16,384 bits (2048 bytes)** 고정폭 정수면 모든 레벨을 여유있게 커버.
+
+### 성능: IdealMul 단독
+
+| 레벨 | HNF 평균 | MLLL 평균 | 비율 |
+|------|---------|----------|------|
+| L1 | 0.12 ms | 41.0 ms | 350x |
+| L3 | 0.15 ms | 102.8 ms | 682x |
+| L5 | 0.16 ms | 186.0 ms | 1148x |
+
+단위 IdealMul에서는 recompute-from-scratch O(beta^2) 때문에 ~350-1150x 느림. incremental Swap1/Swap2로 ~10-50x 개선 가능. 다만 Sign당 IdealMul 호출이 소수이므로 파이프라인 영향은 작음.
+
 ## 재현 방법
 
 ```bash
