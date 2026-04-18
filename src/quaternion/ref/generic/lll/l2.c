@@ -44,10 +44,21 @@ quat_lll_core(ibz_mat_4x4_t *G, ibz_mat_4x4_t *basis)
     // Main L² loop
     dpe_set_z(r[0][0], (*G)[0][0]);
     int kappa = 1;
+    /* Iteration caps: dpe precision loss on pathological input could loop forever. */
+    int outer_iter = 0;
     while (kappa < 4) {
+        if (++outer_iter >= 10000) {
+            fprintf(stderr, "l2.c: outer iteration cap exceeded\n");
+            abort();
+        }
         // size reduce b_κ
         int done = 0;
+        int size_iter = 0;
         while (!done) {
+            if (++size_iter >= 64) {
+                fprintf(stderr, "l2.c: size-reduce iteration cap exceeded\n");
+                abort();
+            }
             // Recompute the κ-th row of the Choleski Factorisation
             // Loop invariant:
             //     r[κ][j] ≈ u[κ][j] ‖b_j*‖² ≈ 〈b_κ, b_j*〉

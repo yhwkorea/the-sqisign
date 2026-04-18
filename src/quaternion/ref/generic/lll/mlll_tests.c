@@ -10,9 +10,12 @@
 
 #include <quaternion.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "internal.h"
 #include "lll_internals.h"
 #include "mlll_internals.h"
+#include "quaternion_tests.h"
+#include <rng.h>
 
 /* ========== Test 1: MLLL produces same lattice as HNF for lattice_mul ========== */
 
@@ -544,6 +547,393 @@ quat_test_mlll_tau_path(void)
     return res;
 }
 
+/* ========== Test: quat_mlll_gram lattice equivalence to quat_mlll ========== */
+
+/* Helper: do both implementations produce the same lattice on one input set? */
+static int
+compare_mlll_vs_gram(const ibz_vec_4_t *generators, int g, const quat_alg_t *alg,
+                     const char *label)
+{
+    ibz_mat_4x4_t basis_a, basis_b;
+    int rank_a = 0, rank_b = 0;
+    ibz_mat_4x4_init(&basis_a);
+    ibz_mat_4x4_init(&basis_b);
+
+    quat_mlll(&basis_a, &rank_a, generators, g, alg);
+    quat_mlll_gram(&basis_b, &rank_b, generators, g, alg);
+
+    int res = 0;
+
+    if (rank_a != rank_b) {
+        printf("  FAIL[%s]: rank mismatch mlll=%d gram=%d\n", label, rank_a, rank_b);
+        res = 1;
+    } else if (rank_a == 4) {
+        quat_lattice_t la, lb;
+        quat_lattice_init(&la);
+        quat_lattice_init(&lb);
+        ibz_mat_4x4_copy(&la.basis, &basis_a);
+        ibz_mat_4x4_copy(&lb.basis, &basis_b);
+        ibz_set(&la.denom, 1);
+        ibz_set(&lb.denom, 1);
+        if (!quat_lattice_equal(&la, &lb)) {
+            printf("  FAIL[%s]: full-rank lattices differ\n", label);
+            res = 1;
+        }
+        quat_lattice_finalize(&la);
+        quat_lattice_finalize(&lb);
+    }
+    /* For rank < 4, the output basis is zero-padded; full equality test requires
+     * projecting to the rank subspace which we skip. The rank check alone is a
+     * useful sanity signal. */
+
+    ibz_mat_4x4_finalize(&basis_a);
+    ibz_mat_4x4_finalize(&basis_b);
+    return res;
+}
+
+int
+quat_test_mlll_gram_equivalence(void)
+{
+    int res = 0;
+
+    /* Test 1: 6 generators, Z^4 standard basis + dependents (from test_dependent) */
+    {
+        quat_alg_t alg;
+        quat_alg_init_set_ui(&alg, 7);
+        ibz_vec_4_t gens[6];
+        for (int i = 0; i < 6; i++) ibz_vec_4_init(&gens[i]);
+        ibz_set(&gens[0][0], 1);
+        ibz_set(&gens[1][1], 1);
+        ibz_set(&gens[2][2], 1);
+        ibz_set(&gens[3][3], 1);
+        ibz_set(&gens[4][0], 1); ibz_set(&gens[4][1], 1);
+        ibz_set(&gens[5][2], 2);
+        res |= compare_mlll_vs_gram(gens, 6, &alg, "dependent_6gen");
+        for (int i = 0; i < 6; i++) ibz_vec_4_finalize(&gens[i]);
+        quat_alg_finalize(&alg);
+    }
+
+    /* Test 2: 8 dense random-ish generators with small prime */
+    {
+        quat_alg_t alg;
+        quat_alg_init_set_ui(&alg, 19);
+        ibz_vec_4_t gens[8];
+        for (int i = 0; i < 8; i++) ibz_vec_4_init(&gens[i]);
+        int vals[8][4] = {
+            {3, 1, 0, 2},
+            {1, 4, 2, 0},
+            {0, 2, 3, 1},
+            {2, 0, 1, 4},
+            {5, 3, 1, 0},
+            {1, 1, 2, 2},
+            {4, 0, 0, 3},
+            {0, 5, 1, 1},
+        };
+        for (int i = 0; i < 8; i++)
+            for (int j = 0; j < 4; j++)
+                ibz_set(&gens[i][j], vals[i][j]);
+        res |= compare_mlll_vs_gram(gens, 8, &alg, "dense_8gen_p19");
+        for (int i = 0; i < 8; i++) ibz_vec_4_finalize(&gens[i]);
+        quat_alg_finalize(&alg);
+    }
+
+    /* Test 3: 16 generators (max), stress */
+    {
+        quat_alg_t alg;
+        quat_alg_init_set_ui(&alg, 11);
+        ibz_vec_4_t gens[16];
+        for (int i = 0; i < 16; i++) ibz_vec_4_init(&gens[i]);
+        for (int i = 0; i < 16; i++) {
+            ibz_set(&gens[i][0], (i * 7 + 3) % 17);
+            ibz_set(&gens[i][1], (i * 11 + 5) % 17);
+            ibz_set(&gens[i][2], (i * 13 + 1) % 17);
+            ibz_set(&gens[i][3], (i * 5 + 9) % 17);
+        }
+        res |= compare_mlll_vs_gram(gens, 16, &alg, "stress_16gen_p11");
+        for (int i = 0; i < 16; i++) ibz_vec_4_finalize(&gens[i]);
+        quat_alg_finalize(&alg);
+    }
+
+    if (res == 0)
+        printf("  PASS: quat_test_mlll_gram_equivalence\n");
+    return res;
+}
+
+/* ========== Test: lideal_create HNF == lideal_create_mlll_gram ========== */
+
+int
+quat_test_lideal_create_gram_equivalence(void)
+{
+    int res = 0;
+    quat_alg_t alg;
+    ibz_t prime;
+    ibz_init(&prime);
+    ibz_set_from_str(&prime,
+        "4ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", 16);
+    quat_alg_init_set(&alg, &prime);
+
+    quat_p_extremal_maximal_order_t order;
+    quat_represent_integer_params_t params;
+    quat_lattice_init(&(order.order));
+    quat_alg_elem_init(&(order.t));
+    quat_alg_elem_init(&(order.z));
+    quat_lattice_O0_set_extremal(&order);
+    params.algebra = &alg;
+    params.order = &order;
+    params.primality_test_iterations = 30;
+
+    uint32_t seed[12] = { 0xCAFEBABE };
+    randombytes_init((unsigned char *)seed, NULL, 256);
+
+    int trials = 25;
+    quat_lattice_t *lats = malloc(trials * sizeof(quat_lattice_t));
+    ibz_t *norms = malloc(trials * sizeof(ibz_t));
+    for (int i = 0; i < trials; i++) {
+        quat_lattice_init(&lats[i]);
+        ibz_init(&norms[i]);
+    }
+
+    if (quat_test_input_random_ideal_lattice_generation(lats, norms, 127, trials, &params) != 0) {
+        printf("  FAIL: random ideal generation\n");
+        res = 1;
+        goto cleanup;
+    }
+
+    /* For each generated lattice, extract a generator x of the ideal and N,
+     * then compare quat_lideal_create vs quat_lideal_create_mlll_gram. */
+    for (int i = 0; i < trials; i++) {
+        /* The random_ideal_lattice_generation produces left O0-ideals with known norms.
+         * We build a generator via an element of the lattice and the norm. */
+        quat_alg_elem_t x;
+        quat_alg_elem_init(&x);
+        /* Use lats[i].basis column 0 as a generator candidate (scaled by denom). */
+        for (int j = 0; j < 4; j++)
+            ibz_copy(&x.coord[j], &lats[i].basis[j][0]);
+        ibz_copy(&x.denom, &lats[i].denom);
+
+        if (quat_alg_elem_is_zero(&x)) {
+            quat_alg_elem_finalize(&x);
+            continue;
+        }
+
+        quat_left_ideal_t I_hnf, I_gram;
+        quat_left_ideal_init(&I_hnf);
+        quat_left_ideal_init(&I_gram);
+
+        quat_lideal_create(&I_hnf, &x, &norms[i], &(order.order), &alg);
+        quat_lideal_create_mlll_gram(&I_gram, &x, &norms[i], &(order.order), &alg);
+
+        if (!quat_lattice_equal(&I_hnf.lattice, &I_gram.lattice)) {
+            printf("  FAIL: trial %d: lattices differ\n", i);
+            res = 1;
+        }
+        if (ibz_cmp(&I_hnf.norm, &I_gram.norm) != 0) {
+            printf("  FAIL: trial %d: norms differ\n", i);
+            res = 1;
+        }
+
+        quat_left_ideal_finalize(&I_hnf);
+        quat_left_ideal_finalize(&I_gram);
+        quat_alg_elem_finalize(&x);
+    }
+
+    if (res == 0)
+        printf("  PASS: quat_test_lideal_create_gram_equivalence (%d trials)\n", trials);
+
+cleanup:
+    for (int i = 0; i < trials; i++) {
+        quat_lattice_finalize(&lats[i]);
+        ibz_finalize(&norms[i]);
+    }
+    free(lats); free(norms);
+    quat_lattice_finalize(&(order.order));
+    quat_alg_elem_finalize(&(order.t));
+    quat_alg_elem_finalize(&(order.z));
+    quat_alg_finalize(&alg);
+    ibz_finalize(&prime);
+    return res;
+}
+
+/* ========== Corner-case tests: minimal / rank-deficient / zero inputs ========== */
+
+/* Helper: check all entries of column c in basis are zero */
+static int
+col_is_zero(const ibz_mat_4x4_t *basis, int c)
+{
+    for (int r = 0; r < 4; r++)
+        if (!ibz_is_zero(&(*basis)[r][c])) return 0;
+    return 1;
+}
+
+int
+quat_test_mlll_all_zero_generators(void)
+{
+    int res = 0;
+    quat_alg_t alg;
+    quat_alg_init_set_ui(&alg, 7);
+
+    ibz_vec_4_t generators[4];
+    for (int i = 0; i < 4; i++)
+        ibz_vec_4_init(&generators[i]);  /* all zero */
+
+    ibz_mat_4x4_t basis;
+    int rank = -1;
+    ibz_mat_4x4_init(&basis);
+
+    quat_mlll(&basis, &rank, generators, 4, &alg);
+
+    if (rank != 0) {
+        printf("  FAIL: all-zero generators should give rank 0, got %d\n", rank);
+        res = 1;
+    }
+
+    if (res == 0) printf("  PASS: quat_test_mlll_all_zero_generators\n");
+
+    ibz_mat_4x4_finalize(&basis);
+    for (int i = 0; i < 4; i++)
+        ibz_vec_4_finalize(&generators[i]);
+    quat_alg_finalize(&alg);
+    return res;
+}
+
+int
+quat_test_mlll_single_generator(void)
+{
+    int res = 0;
+    quat_alg_t alg;
+    quat_alg_init_set_ui(&alg, 7);
+
+    ibz_vec_4_t generators[1];
+    ibz_vec_4_init(&generators[0]);
+    ibz_set(&generators[0][0], 3);
+    ibz_set(&generators[0][2], 5);
+
+    ibz_mat_4x4_t basis;
+    int rank = -1;
+    ibz_mat_4x4_init(&basis);
+
+    quat_mlll(&basis, &rank, generators, 1, &alg);
+
+    if (rank != 1) {
+        printf("  FAIL: g=1 non-zero should give rank 1, got %d\n", rank);
+        res = 1;
+    } else {
+        /* basis column 0 should equal generator (up to sign) */
+        for (int r = 0; r < 4; r++) {
+            if (ibz_cmp(&basis[r][0], &generators[0][r]) != 0) {
+                ibz_t neg;
+                ibz_init(&neg);
+                ibz_neg(&neg, &generators[0][r]);
+                if (ibz_cmp(&basis[r][0], &neg) != 0) {
+                    printf("  FAIL: g=1 basis col 0 row %d doesn't match generator\n", r);
+                    res = 1;
+                }
+                ibz_finalize(&neg);
+                break;
+            }
+        }
+    }
+
+    if (res == 0) printf("  PASS: quat_test_mlll_single_generator\n");
+
+    ibz_mat_4x4_finalize(&basis);
+    ibz_vec_4_finalize(&generators[0]);
+    quat_alg_finalize(&alg);
+    return res;
+}
+
+int
+quat_test_mlll_two_generators_dependent(void)
+{
+    int res = 0;
+    quat_alg_t alg;
+    quat_alg_init_set_ui(&alg, 7);
+
+    ibz_vec_4_t generators[2];
+    for (int i = 0; i < 2; i++)
+        ibz_vec_4_init(&generators[i]);
+
+    /* b1 = (2,0,3,0), b2 = 2*b1 = (4,0,6,0) */
+    ibz_set(&generators[0][0], 2);
+    ibz_set(&generators[0][2], 3);
+    ibz_set(&generators[1][0], 4);
+    ibz_set(&generators[1][2], 6);
+
+    ibz_mat_4x4_t basis;
+    int rank = -1;
+    ibz_mat_4x4_init(&basis);
+
+    quat_mlll(&basis, &rank, generators, 2, &alg);
+
+    if (rank != 1) {
+        printf("  FAIL: two colinear generators should give rank 1, got %d\n", rank);
+        res = 1;
+    }
+
+    if (res == 0) printf("  PASS: quat_test_mlll_two_generators_dependent\n");
+
+    ibz_mat_4x4_finalize(&basis);
+    for (int i = 0; i < 2; i++)
+        ibz_vec_4_finalize(&generators[i]);
+    quat_alg_finalize(&alg);
+    return res;
+}
+
+int
+quat_test_mlll_rank_deficient(void)
+{
+    int res = 0;
+    quat_alg_t alg;
+    quat_alg_init_set_ui(&alg, 7);
+
+    /* 8 generators in a rank-2 sublattice: all in e1-e2 plane */
+    ibz_vec_4_t generators[8];
+    for (int i = 0; i < 8; i++)
+        ibz_vec_4_init(&generators[i]);
+
+    /* e1, e2, e1+e2, 2*e1, 3*e2, e1-e2, 0, 2*e1+3*e2 */
+    ibz_set(&generators[0][0], 1);
+    ibz_set(&generators[1][1], 1);
+    ibz_set(&generators[2][0], 1); ibz_set(&generators[2][1], 1);
+    ibz_set(&generators[3][0], 2);
+    ibz_set(&generators[4][1], 3);
+    ibz_set(&generators[5][0], 1); ibz_set(&generators[5][1], -1);
+    /* generators[6] left as zero */
+    ibz_set(&generators[7][0], 2); ibz_set(&generators[7][1], 3);
+
+    ibz_mat_4x4_t basis;
+    int rank = -1;
+    ibz_mat_4x4_init(&basis);
+
+    quat_mlll(&basis, &rank, generators, 8, &alg);
+
+    if (rank != 2) {
+        printf("  FAIL: rank-2 sublattice should give rank 2, got %d\n", rank);
+        res = 1;
+    } else {
+        /* Columns 2 and 3 should be zero (only cols 0,1 meaningful) */
+        if (!col_is_zero(&basis, 2) || !col_is_zero(&basis, 3)) {
+            printf("  FAIL: rank-2 output should zero columns 2,3\n");
+            res = 1;
+        }
+        /* All basis entries should have row 2,3 = 0 (no e3/e4 component) */
+        for (int c = 0; c < 2; c++) {
+            if (!ibz_is_zero(&basis[2][c]) || !ibz_is_zero(&basis[3][c])) {
+                printf("  FAIL: basis col %d has nonzero e3 or e4 component\n", c);
+                res = 1;
+            }
+        }
+    }
+
+    if (res == 0) printf("  PASS: quat_test_mlll_rank_deficient\n");
+
+    ibz_mat_4x4_finalize(&basis);
+    for (int i = 0; i < 8; i++)
+        ibz_vec_4_finalize(&generators[i]);
+    quat_alg_finalize(&alg);
+    return res;
+}
+
 /* ========== Test runner ========== */
 
 int
@@ -558,6 +948,12 @@ quat_test_mlll_all(void)
     res |= quat_test_compact_ideal_multiplication();
     res |= quat_test_mlll_realistic_scale();
     res |= quat_test_mlll_tau_path();
+    res |= quat_test_mlll_gram_equivalence();
+    res |= quat_test_lideal_create_gram_equivalence();
+    res |= quat_test_mlll_all_zero_generators();
+    res |= quat_test_mlll_single_generator();
+    res |= quat_test_mlll_two_generators_dependent();
+    res |= quat_test_mlll_rank_deficient();
 
     if (res == 0) {
         printf("=== All MLLL tests PASSED ===\n");

@@ -58,51 +58,138 @@ generators_max_bitsize(const quat_lattice_t *lat1,
 /**
  * @brief Run the HNF vs MLLL comparison for one pair of lattices
  */
+typedef struct {
+    int input_bits;
+    int hnf_out_bits, mlll_out_bits, gram_out_bits;
+    int hnf_inter_bits;
+    int mlll_inter_bits, mlll_vec_bits, mlll_gso_bits;
+    int gram_inter_bits, gram_vec_bits, gram_gso_bits;
+    double hnf_time_ms, mlll_time_ms, gram_time_ms;
+} bench_result_t;
+
 static void
 bench_one_mul(const quat_lattice_t *lat1,
               const quat_lattice_t *lat2,
               const quat_alg_t *alg,
-              int *hnf_out_bits,
-              int *mlll_out_bits,
-              int *hnf_inter_bits,
-              int *mlll_inter_bits,
-              int *mlll_vec_bits,
-              int *mlll_gso_bits,
-              int *input_bits,
-              double *hnf_time_ms,
-              double *mlll_time_ms)
+              bench_result_t *out)
 {
-    quat_lattice_t prod_hnf, prod_mlll;
+    quat_lattice_t prod_hnf, prod_mlll, prod_gram;
     quat_lattice_init(&prod_hnf);
     quat_lattice_init(&prod_mlll);
+    quat_lattice_init(&prod_gram);
     clock_t t0, t1;
 
-    *input_bits = generators_max_bitsize(lat1, lat2);
+    out->input_bits = generators_max_bitsize(lat1, lat2);
 
     /* HNF with tracking */
     tracker_reset();
     t0 = clock();
     quat_lattice_mul(&prod_hnf, lat1, lat2, alg);
     t1 = clock();
-    *hnf_time_ms = (double)(t1 - t0) * 1000.0 / CLOCKS_PER_SEC;
-    *hnf_out_bits = lattice_max_bitsize(&prod_hnf);
-    *hnf_inter_bits = tracker_get_max();
+    out->hnf_time_ms = (double)(t1 - t0) * 1000.0 / CLOCKS_PER_SEC;
+    out->hnf_out_bits = lattice_max_bitsize(&prod_hnf);
+    out->hnf_inter_bits = tracker_get_max();
     tracker_disable();
 
-    /* MLLL with tracking */
+    /* MLLL (Cohen integral GSO) with tracking */
     tracker_reset();
     t0 = clock();
     quat_lattice_mul_mlll(&prod_mlll, lat1, lat2, alg);
     t1 = clock();
-    *mlll_time_ms = (double)(t1 - t0) * 1000.0 / CLOCKS_PER_SEC;
-    *mlll_out_bits = lattice_max_bitsize(&prod_mlll);
-    *mlll_inter_bits = tracker_get_max();
-    *mlll_vec_bits = tracker_get_vec_max();
-    *mlll_gso_bits = tracker_get_gso_max();
+    out->mlll_time_ms = (double)(t1 - t0) * 1000.0 / CLOCKS_PER_SEC;
+    out->mlll_out_bits = lattice_max_bitsize(&prod_mlll);
+    out->mlll_inter_bits = tracker_get_max();
+    out->mlll_vec_bits = tracker_get_vec_max();
+    out->mlll_gso_bits = tracker_get_gso_max();
+    tracker_disable();
+
+    /* MLLL Gram (L2-style) with tracking */
+    tracker_reset();
+    t0 = clock();
+    quat_lattice_mul_mlll_gram(&prod_gram, lat1, lat2, alg);
+    t1 = clock();
+    out->gram_time_ms = (double)(t1 - t0) * 1000.0 / CLOCKS_PER_SEC;
+    out->gram_out_bits = lattice_max_bitsize(&prod_gram);
+    out->gram_inter_bits = tracker_get_max();
+    out->gram_vec_bits = tracker_get_vec_max();
+    out->gram_gso_bits = tracker_get_gso_max();
     tracker_disable();
 
     quat_lattice_finalize(&prod_hnf);
     quat_lattice_finalize(&prod_mlll);
+    quat_lattice_finalize(&prod_gram);
+}
+
+/* ---------- Alg 3 bench: quat_lideal_create HNF vs Gram ---------- */
+
+typedef struct {
+    int input_bits;
+    int hnf_out_bits, gram_out_bits;
+    int hnf_inter_bits;
+    int gram_inter_bits, gram_vec_bits, gram_gso_bits;
+    double hnf_time_ms, gram_time_ms;
+} alg3_result_t;
+
+static void
+bench_one_alg3(const quat_lattice_t *src_lat,
+               const ibz_t *norm,
+               const quat_lattice_t *order,
+               const quat_alg_t *alg,
+               alg3_result_t *out)
+{
+    quat_alg_elem_t x;
+    quat_alg_elem_init(&x);
+    for (int j = 0; j < 4; j++)
+        ibz_copy(&x.coord[j], &src_lat->basis[j][0]);
+    ibz_copy(&x.denom, &src_lat->denom);
+
+    out->input_bits = 0;
+    for (int j = 0; j < 4; j++) {
+        int b = ibz_bitsize(&x.coord[j]);
+        if (b > out->input_bits) out->input_bits = b;
+    }
+    int nb = ibz_bitsize(norm);
+    if (nb > out->input_bits) out->input_bits = nb;
+
+    quat_left_ideal_t I_hnf, I_gram;
+    quat_left_ideal_init(&I_hnf);
+    quat_left_ideal_init(&I_gram);
+
+    clock_t t0, t1;
+
+    /* HNF path */
+    tracker_reset();
+    t0 = clock();
+    quat_lideal_create(&I_hnf, &x, norm, order, alg);
+    t1 = clock();
+    out->hnf_time_ms = (double)(t1 - t0) * 1000.0 / CLOCKS_PER_SEC;
+    out->hnf_out_bits = 0;
+    for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) {
+        int b = ibz_bitsize(&I_hnf.lattice.basis[i][j]);
+        if (b > out->hnf_out_bits) out->hnf_out_bits = b;
+    }
+    out->hnf_inter_bits = tracker_get_max();
+    tracker_disable();
+
+    /* Gram path */
+    tracker_reset();
+    t0 = clock();
+    quat_lideal_create_mlll_gram(&I_gram, &x, norm, order, alg);
+    t1 = clock();
+    out->gram_time_ms = (double)(t1 - t0) * 1000.0 / CLOCKS_PER_SEC;
+    out->gram_out_bits = 0;
+    for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) {
+        int b = ibz_bitsize(&I_gram.lattice.basis[i][j]);
+        if (b > out->gram_out_bits) out->gram_out_bits = b;
+    }
+    out->gram_inter_bits = tracker_get_max();
+    out->gram_vec_bits = tracker_get_vec_max();
+    out->gram_gso_bits = tracker_get_gso_max();
+    tracker_disable();
+
+    quat_left_ideal_finalize(&I_hnf);
+    quat_left_ideal_finalize(&I_gram);
+    quat_alg_elem_finalize(&x);
 }
 
 /* ---------- main ---------- */
@@ -113,14 +200,26 @@ main(int argc, char *argv[])
     int iterations = 20;
     int norm_bitsize = 127;
     int level = 1;
+    const char *mode = "alg2";
+    int ret_code = 0;
 
     for (int i = 1; i < argc; i++) {
         if (sscanf(argv[i], "--iterations=%d", &iterations) == 1) continue;
         if (sscanf(argv[i], "--level=%d", &level) == 1) continue;
+        if (strncmp(argv[i], "--mode=", 7) == 0) { mode = argv[i] + 7; continue; }
         if (strcmp(argv[i], "--help") == 0) {
-            printf("Usage: %s [--level=1|3|5] [--iterations=N]\n", argv[0]);
+            printf("Usage: %s [--level=1|3|5] [--iterations=N] [--mode=alg2|alg3]\n", argv[0]);
             return 0;
         }
+    }
+
+    if (strcmp(mode, "alg2") != 0 && strcmp(mode, "alg3") != 0) {
+        fprintf(stderr, "ERROR: unknown --mode=%s (expected alg2 or alg3)\n", mode);
+        return 1;
+    }
+    if (iterations <= 0) {
+        fprintf(stderr, "ERROR: --iterations must be positive (got %d)\n", iterations);
+        return 1;
     }
 
     ibz_t prime;
@@ -164,6 +263,16 @@ main(int argc, char *argv[])
     quat_lattice_t *lats2 = malloc(iterations * sizeof(quat_lattice_t));
     ibz_t *norms1 = malloc(iterations * sizeof(ibz_t));
     ibz_t *norms2 = malloc(iterations * sizeof(ibz_t));
+    if (!lats1 || !lats2 || !norms1 || !norms2) {
+        fprintf(stderr, "ERROR: malloc failed for iterations=%d\n", iterations);
+        free(lats1); free(lats2); free(norms1); free(norms2);
+        quat_lattice_finalize(&(order.order));
+        quat_alg_elem_finalize(&(order.t));
+        quat_alg_elem_finalize(&(order.z));
+        quat_alg_finalize(&alg);
+        ibz_finalize(&prime);
+        return 1;
+    }
 
     for (int i = 0; i < iterations; i++) {
         quat_lattice_init(&lats1[i]);
@@ -173,68 +282,142 @@ main(int argc, char *argv[])
     }
 
     printf("Generating %d random ideal lattice pairs (bitsize=%d)...\n", iterations, norm_bitsize);
+    int is_alg3 = (strcmp(mode, "alg3") == 0);
+    printf("Mode: %s\n", mode);
+
     clock_t gen_t0 = clock();
     int ret1 = quat_test_input_random_ideal_lattice_generation(lats1, norms1, norm_bitsize, iterations, &params);
     clock_t gen_t1 = clock();
     printf("  Set 1: %.2f ms\n", (double)(gen_t1 - gen_t0) * 1000.0 / CLOCKS_PER_SEC);
-    gen_t0 = clock();
-    int ret2 = quat_test_input_random_ideal_lattice_generation(lats2, norms2, norm_bitsize, iterations, &params);
-    gen_t1 = clock();
-    printf("  Set 2: %.2f ms\n", (double)(gen_t1 - gen_t0) * 1000.0 / CLOCKS_PER_SEC);
+    int ret2 = 0;
+    if (!is_alg3) {
+        gen_t0 = clock();
+        ret2 = quat_test_input_random_ideal_lattice_generation(lats2, norms2, norm_bitsize, iterations, &params);
+        gen_t1 = clock();
+        printf("  Set 2: %.2f ms\n", (double)(gen_t1 - gen_t0) * 1000.0 / CLOCKS_PER_SEC);
+    }
     if (ret1 || ret2) {
-        printf("ERROR: random lattice generation failed\n");
-        return 1;
+        fprintf(stderr, "ERROR: random lattice generation failed\n");
+        ret_code = 1;
+        goto done;
     }
     printf("Generation done.\n\n");
 
-    /* Column headers */
-    printf("%-5s | %5s | %8s | %8s %8s %8s | %8s %8s | %8s %8s\n",
-           "Trial", "Input", "HNF int",
-           "MLLL tot", "MLLL vec", "MLLL gso",
-           "HNF out", "MLLL out", "HNF ms", "MLLL ms");
-    printf("------+-------+----------+-----------------------------+-------------------+-------------------\n");
+    if (is_alg3) {
+        /* ---- Alg 3 bench ---- */
+        printf("%-4s | %5s | %7s | %7s %7s %7s | %7s %7s | %6s %6s\n",
+               "T", "Inp", "HNFint",
+               "GRMtot", "GRMv", "GRMg",
+               "HNFout", "GRMout",
+               "HNFms", "GRMms");
+        printf("-----+-------+---------+-------------------------+-----------------+---------------\n");
 
-    long sum_hnf_inter = 0, sum_mlll_inter = 0;
-    long sum_mlll_vec = 0, sum_mlll_gso = 0;
-    long sum_hnf_out = 0, sum_mlll_out = 0;
-    int max_hnf_inter = 0, max_mlll_inter = 0;
-    int max_mlll_vec = 0, max_mlll_gso = 0;
-    int max_hnf_out = 0, max_mlll_out = 0;
-    double total_hnf_ms = 0, total_mlll_ms = 0;
+        long sum_hnf_inter = 0, sum_gram_inter = 0, sum_gram_vec = 0, sum_gram_gso = 0;
+        long sum_hnf_out = 0, sum_gram_out = 0;
+        int max_hnf_inter = 0, max_gram_inter = 0, max_gram_vec = 0, max_gram_gso = 0;
+        int max_hnf_out = 0, max_gram_out = 0;
+        double total_hnf_ms = 0, total_gram_ms = 0;
 
-    for (int i = 0; i < iterations; i++) {
-        int hnf_out, mlll_out, hnf_inter, mlll_inter, mlll_vec, mlll_gso, input_bits;
-        double hnf_ms, mlll_ms;
+        for (int i = 0; i < iterations; i++) {
+            alg3_result_t r;
+            bench_one_alg3(&lats1[i], &norms1[i], &(order.order), &alg, &r);
 
-        bench_one_mul(&lats1[i], &lats2[i], &alg,
-                      &hnf_out, &mlll_out,
-                      &hnf_inter, &mlll_inter,
-                      &mlll_vec, &mlll_gso,
-                      &input_bits,
-                      &hnf_ms, &mlll_ms);
+            if (iterations <= 50) {
+                printf("%-4d | %5d | %7d | %7d %7d %7d | %7d %7d | %6.1f %6.1f\n",
+                       i, r.input_bits, r.hnf_inter_bits,
+                       r.gram_inter_bits, r.gram_vec_bits, r.gram_gso_bits,
+                       r.hnf_out_bits, r.gram_out_bits,
+                       r.hnf_time_ms, r.gram_time_ms);
+            }
 
-        printf("%-5d | %5d | %8d | %8d %8d %8d | %8d %8d | %8.2f %8.2f\n",
-               i, input_bits, hnf_inter,
-               mlll_inter, mlll_vec, mlll_gso,
-               hnf_out, mlll_out, hnf_ms, mlll_ms);
+            sum_hnf_inter += r.hnf_inter_bits;
+            sum_gram_inter += r.gram_inter_bits;
+            sum_gram_vec += r.gram_vec_bits;
+            sum_gram_gso += r.gram_gso_bits;
+            sum_hnf_out += r.hnf_out_bits;
+            sum_gram_out += r.gram_out_bits;
+            if (r.hnf_inter_bits > max_hnf_inter) max_hnf_inter = r.hnf_inter_bits;
+            if (r.gram_inter_bits > max_gram_inter) max_gram_inter = r.gram_inter_bits;
+            if (r.gram_vec_bits > max_gram_vec) max_gram_vec = r.gram_vec_bits;
+            if (r.gram_gso_bits > max_gram_gso) max_gram_gso = r.gram_gso_bits;
+            if (r.hnf_out_bits > max_hnf_out) max_hnf_out = r.hnf_out_bits;
+            if (r.gram_out_bits > max_gram_out) max_gram_out = r.gram_out_bits;
+            total_hnf_ms += r.hnf_time_ms;
+            total_gram_ms += r.gram_time_ms;
+        }
 
-        sum_hnf_inter += hnf_inter;
-        sum_mlll_inter += mlll_inter;
-        sum_mlll_vec += mlll_vec;
-        sum_mlll_gso += mlll_gso;
-        sum_hnf_out += hnf_out;
-        sum_mlll_out += mlll_out;
-        if (hnf_inter > max_hnf_inter) max_hnf_inter = hnf_inter;
-        if (mlll_inter > max_mlll_inter) max_mlll_inter = mlll_inter;
-        if (mlll_vec > max_mlll_vec) max_mlll_vec = mlll_vec;
-        if (mlll_gso > max_mlll_gso) max_mlll_gso = mlll_gso;
-        if (hnf_out > max_hnf_out) max_hnf_out = hnf_out;
-        if (mlll_out > max_mlll_out) max_mlll_out = mlll_out;
-        total_hnf_ms += hnf_ms;
-        total_mlll_ms += mlll_ms;
+        printf("\n=== Alg 3 Summary ===\n");
+        printf("HNF  intermediate:  avg=%ld  max=%d\n",
+               sum_hnf_inter / iterations, max_hnf_inter);
+        printf("GRAM total:         avg=%ld  max=%d\n",
+               sum_gram_inter / iterations, max_gram_inter);
+        printf("GRAM vec coords:    avg=%ld  max=%d  (Lemma 1)\n",
+               sum_gram_vec / iterations, max_gram_vec);
+        printf("GRAM Gram entries:  avg=%ld  max=%d  (Lemma 3)\n",
+               sum_gram_gso / iterations, max_gram_gso);
+        printf("Output bits:        HNF avg=%ld max=%d  GRAM avg=%ld max=%d\n",
+               sum_hnf_out / iterations, max_hnf_out,
+               sum_gram_out / iterations, max_gram_out);
+        printf("Total time:         HNF=%.2fms  GRAM=%.2fms  (GRAM/HNF=%.2f)\n",
+               total_hnf_ms, total_gram_ms,
+               total_hnf_ms > 0 ? total_gram_ms / total_hnf_ms : 0.0);
+        goto done;
     }
 
-    printf("------+-------+----------+-----------------------------+-------------------+-------------------\n");
+    /* Column headers */
+    printf("%-4s | %5s | %7s | %7s %7s %7s | %7s %7s %7s | %6s %6s %6s\n",
+           "T", "Inp", "HNFint",
+           "MLLLtot", "MLLLv", "MLLLg",
+           "GRMtot", "GRMv", "GRMg",
+           "HNFms", "MLLLms", "GRMms");
+    printf("-----+-------+---------+-------------------------+-------------------------+--------------------\n");
+
+    long sum_hnf_inter = 0, sum_mlll_inter = 0, sum_gram_inter = 0;
+    long sum_mlll_vec = 0, sum_mlll_gso = 0;
+    long sum_gram_vec = 0, sum_gram_gso = 0;
+    long sum_hnf_out = 0, sum_mlll_out = 0, sum_gram_out = 0;
+    int max_hnf_inter = 0, max_mlll_inter = 0, max_gram_inter = 0;
+    int max_mlll_vec = 0, max_mlll_gso = 0;
+    int max_gram_vec = 0, max_gram_gso = 0;
+    int max_hnf_out = 0, max_mlll_out = 0, max_gram_out = 0;
+    double total_hnf_ms = 0, total_mlll_ms = 0, total_gram_ms = 0;
+
+    for (int i = 0; i < iterations; i++) {
+        bench_result_t r;
+        bench_one_mul(&lats1[i], &lats2[i], &alg, &r);
+
+        printf("%-4d | %5d | %7d | %7d %7d %7d | %7d %7d %7d | %6.1f %6.1f %6.1f\n",
+               i, r.input_bits, r.hnf_inter_bits,
+               r.mlll_inter_bits, r.mlll_vec_bits, r.mlll_gso_bits,
+               r.gram_inter_bits, r.gram_vec_bits, r.gram_gso_bits,
+               r.hnf_time_ms, r.mlll_time_ms, r.gram_time_ms);
+
+        sum_hnf_inter += r.hnf_inter_bits;
+        sum_mlll_inter += r.mlll_inter_bits;
+        sum_mlll_vec += r.mlll_vec_bits;
+        sum_mlll_gso += r.mlll_gso_bits;
+        sum_gram_inter += r.gram_inter_bits;
+        sum_gram_vec += r.gram_vec_bits;
+        sum_gram_gso += r.gram_gso_bits;
+        sum_hnf_out += r.hnf_out_bits;
+        sum_mlll_out += r.mlll_out_bits;
+        sum_gram_out += r.gram_out_bits;
+        if (r.hnf_inter_bits > max_hnf_inter) max_hnf_inter = r.hnf_inter_bits;
+        if (r.mlll_inter_bits > max_mlll_inter) max_mlll_inter = r.mlll_inter_bits;
+        if (r.mlll_vec_bits > max_mlll_vec) max_mlll_vec = r.mlll_vec_bits;
+        if (r.mlll_gso_bits > max_mlll_gso) max_mlll_gso = r.mlll_gso_bits;
+        if (r.gram_inter_bits > max_gram_inter) max_gram_inter = r.gram_inter_bits;
+        if (r.gram_vec_bits > max_gram_vec) max_gram_vec = r.gram_vec_bits;
+        if (r.gram_gso_bits > max_gram_gso) max_gram_gso = r.gram_gso_bits;
+        if (r.hnf_out_bits > max_hnf_out) max_hnf_out = r.hnf_out_bits;
+        if (r.mlll_out_bits > max_mlll_out) max_mlll_out = r.mlll_out_bits;
+        if (r.gram_out_bits > max_gram_out) max_gram_out = r.gram_out_bits;
+        total_hnf_ms += r.hnf_time_ms;
+        total_mlll_ms += r.mlll_time_ms;
+        total_gram_ms += r.gram_time_ms;
+    }
+
+    printf("-----+-------+---------+-------------------------+-------------------------+--------------------\n");
     printf("\n=== Summary ===\n");
     printf("HNF  intermediate:  avg=%ld  max=%d\n",
            sum_hnf_inter / iterations, max_hnf_inter);
@@ -244,13 +427,21 @@ main(int argc, char *argv[])
            sum_mlll_vec / iterations, max_mlll_vec);
     printf("MLLL GSO coeffs:    avg=%ld  max=%d  (integral GSO overhead)\n",
            sum_mlll_gso / iterations, max_mlll_gso);
-    printf("Output bits:        HNF avg=%ld max=%d  MLLL avg=%ld max=%d\n",
+    printf("GRAM total:         avg=%ld  max=%d\n",
+           sum_gram_inter / iterations, max_gram_inter);
+    printf("GRAM vec coords:    avg=%ld  max=%d  (Lemma 1 bounded)\n",
+           sum_gram_vec / iterations, max_gram_vec);
+    printf("GRAM Gram entries:  avg=%ld  max=%d  (Lemma 3 bound target)\n",
+           sum_gram_gso / iterations, max_gram_gso);
+    printf("Output bits:        HNF avg=%ld max=%d  MLLL avg=%ld max=%d  GRAM avg=%ld max=%d\n",
            sum_hnf_out / iterations, max_hnf_out,
-           sum_mlll_out / iterations, max_mlll_out);
-    printf("Total time:         HNF=%.2fms  MLLL=%.2fms  (MLLL/HNF=%.1f)\n",
-           total_hnf_ms, total_mlll_ms,
-           total_hnf_ms > 0 ? total_mlll_ms / total_hnf_ms : 0.0);
+           sum_mlll_out / iterations, max_mlll_out,
+           sum_gram_out / iterations, max_gram_out);
+    printf("Total time:         HNF=%.2fms  MLLL=%.2fms  GRAM=%.2fms  (GRAM/MLLL=%.2f)\n",
+           total_hnf_ms, total_mlll_ms, total_gram_ms,
+           total_mlll_ms > 0 ? total_gram_ms / total_mlll_ms : 0.0);
 
+done:
     /* Cleanup */
     for (int i = 0; i < iterations; i++) {
         quat_lattice_finalize(&lats1[i]);
@@ -265,5 +456,5 @@ main(int argc, char *argv[])
     quat_alg_elem_finalize(&(order.z));
     quat_alg_finalize(&alg);
     ibz_finalize(&prime);
-    return 0;
+    return ret_code;
 }

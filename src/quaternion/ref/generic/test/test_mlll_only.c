@@ -41,5 +41,41 @@ int main(void)
     printf("tau_path done (res=%d)\n", res);
     fflush(stdout);
 
+    printf("Starting MLLL test: gram_equivalence...\n");
+    fflush(stdout);
+    res |= quat_test_mlll_gram_equivalence();
+    printf("gram_equivalence done (res=%d)\n", res);
+    fflush(stdout);
+
+    printf("Starting MLLL test: lideal_create_gram_equivalence...\n");
+    fflush(stdout);
+    res |= quat_test_lideal_create_gram_equivalence();
+    printf("lideal_create_gram_equivalence done (res=%d)\n", res);
+    fflush(stdout);
+
+    printf("Starting MLLL test: all_zero_generators...\n");
+    fflush(stdout);
+    res |= quat_test_mlll_all_zero_generators();
+    printf("all_zero_generators done (res=%d)\n", res);
+    fflush(stdout);
+
+    printf("Starting MLLL test: single_generator...\n");
+    fflush(stdout);
+    res |= quat_test_mlll_single_generator();
+    printf("single_generator done (res=%d)\n", res);
+    fflush(stdout);
+
+    printf("Starting MLLL test: two_generators_dependent...\n");
+    fflush(stdout);
+    res |= quat_test_mlll_two_generators_dependent();
+    printf("two_generators_dependent done (res=%d)\n", res);
+    fflush(stdout);
+
+    printf("Starting MLLL test: rank_deficient...\n");
+    fflush(stdout);
+    res |= quat_test_mlll_rank_deficient();
+    printf("rank_deficient done (res=%d)\n", res);
+    fflush(stdout);
+
     return res;
 }
