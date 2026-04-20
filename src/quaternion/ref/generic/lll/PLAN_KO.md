@@ -20,7 +20,7 @@
 ### 테스트/벤치
 
 - **테스트 12/12 PASS** (감사 후 M5 커버리지 보강 포함)
-- **L1 10k trials 실측 완료** (vec 258 / Gram 518 bits, C1 픽스 반영 후)
+- **L1/L3/L5 10k trials 실측 완료** (C1 픽스 반영 후) — vec 259/391/513, Gram 518/782/1026 bits
 - `sqisign_bm_mlll --mode=alg2|alg3 --iterations=N` CLI 동작
 
 ### HNF 기반으로 남아있는 것
@@ -32,16 +32,28 @@
 
 ## 로드맵
 
-### Phase 1 — 측정 보강 (1-2일)
+### Phase 1 — 측정 보강 (완료: 2026-04-21)
 
 **목표**: C1 픽스 반영된 정확한 bitsize 표를 L1/L3/L5 전체에 대해 확보.
 
-- [ ] **P1-1** L3 10k trial 벤치 (`--mode=alg2`, `--mode=alg3`)
-- [ ] **P1-2** L5 10k trial 벤치 (동일)
-- [ ] **P1-3** `project_sqisign_mlll.md` 메모리 B*_{1,3,5} 표 갱신 (L1 이미 갱신됨)
-- [ ] **P1-4** `README_MLLL_BENCHMARK_KO.md` 숫자 업데이트 + C1 영향 명시
+- [x] **P1-1** L3 10k trial 벤치 (`--mode=alg2`, `--mode=alg3`) — `bench_logs_2026-04-19/L3_alg{2,3}_10k.log`
+- [x] **P1-2** L5 10k trial 벤치 (동일) — `bench_logs_2026-04-19/L5_alg{2,3}_10k.log`
+- [x] **P1-3** `project_sqisign_mlll.md` 메모리 B*_{1,3,5} 표 갱신 (2026-04-21)
+- [x] **P1-4** `README_MLLL_BENCHMARK_KO.md` 숫자 업데이트 + C1 영향 명시 (2026-04-21)
 
-**Why**: 감사 C1 픽스로 Cohen path max가 3028→3543 bits로 이동. L3/L5도 같은 폭 누락이 있을 가능성. typedef 결정 근거 문서를 정합성 있게 맞춰야 Phase 2가 확정됨.
+**측정 결과 요약** (GRAM 경로, max bits, C1 픽스 후):
+
+| Level | vec (Lemma 1) | Gram (Lemma 3) | Cohen 비교 | HNF 비교 |
+|---|---|---|---|---|
+| L1 | 259 | 518 | 3543 | 2160 |
+| L3 | 391 | 782 | 5389 | 3293 |
+| L5 | 513 | 1026 | 7102 | 4330 |
+
+- C1 픽스는 Cohen 경로에 +515 bits (L1) 드러남, GRAM은 +1~2 bits — **typedef 폭 결정 유효**.
+- 시간비 GRAM/Cohen: L3 5.5%, L5 4.0% (레벨↑ GRAM 우세↑).
+- Alg 3 GRAM/HNF 시간비: L3 0.62, L5 0.61 (이미 HNF 대비 빠름).
+
+**Why**: 감사 C1 픽스로 Cohen path max가 3028→3543 bits로 이동. L3/L5도 같은 폭 누락 가능성 있어 재측정. GRAM 경로는 거의 영향 없음을 실측 확인 — Phase 2 typedef 폭 그대로 사용 가능.
 
 ### Phase 2 — Fixed-precision 전환 (3-5일)
 
@@ -117,12 +129,12 @@
 
 ## 일정 (러프)
 
-| Phase | 기간 | 누적 |
-|---|---|---|
-| P1 측정 | ~2d | 2026-04-21 |
-| P2 fixed-precision | ~5d | 2026-04-26 |
-| P3 Alg 1/4 | ~2w | 2026-05-10 |
-| P4 SQIsign 통합 | ~3w | 2026-05-31 |
-| P5 PR 분리 | ~1w | 2026-06-07 |
+| Phase | 기간 | 누적 | 상태 |
+|---|---|---|---|
+| P1 측정 | ~2d | 2026-04-21 | ✅ 완료 |
+| P2 fixed-precision | ~5d | 2026-04-26 | 진행 예정 (백엔드 결정 문서 착수) |
+| P3 Alg 1/4 | ~2w | 2026-05-10 | |
+| P4 SQIsign 통합 | ~3w | 2026-05-31 | |
+| P5 PR 분리 | ~1w | 2026-06-07 | |
 
 실제 일정은 Phase 2 백엔드 결정과 Alg 1 기존 구현 조사 결과에 따라 크게 달라짐.
