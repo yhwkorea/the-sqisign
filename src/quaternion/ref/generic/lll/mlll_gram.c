@@ -65,9 +65,19 @@ quat_mlll_gram_get_prealloc_mode(void)
 
 /* ---------- Phase 2 candidate C: fixed-precision path switch ---------- */
 
-/* Process-global mode flag for candidate C. 0 = ibz path, 1 = fp path
- * when widths match alg->p level. See quat_mlll_gram dispatcher below. */
-static int g_fp_mode = 0;
+/* Process-global mode flag for candidate C. 1 = fp path (Phase 2 primary,
+ * paper contribution: stack fixed-width limbs + runtime Lemma 3 trap),
+ * 0 = ibz baseline fallback (regression oracle). Default = 1. When the
+ * level doesn't resolve via quat_fp_widths_from_alg (unknown p bitsize),
+ * the dispatcher silently falls back to ibz regardless of this flag.
+ * See quat_mlll_gram dispatcher below.
+ *
+ * History: defaulted to 0 through 2026-04-21 AM (fp was scaffold).
+ * Flipped to 1 after re-reading Phase 2 criteria — time regression
+ * (L1 alg2 ~5.25x) is explicitly acceptable per the paper's
+ * contribution target (heap-free + Lemma 3 audit), and was never a
+ * dismissal criterion. See FIXED_PRECISION_DECISION_KO.md §5.1. */
+static int g_fp_mode = 1;
 
 void
 quat_mlll_gram_set_fp_mode(int mode)

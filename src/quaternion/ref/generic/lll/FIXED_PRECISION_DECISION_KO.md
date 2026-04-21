@@ -95,19 +95,42 @@ Phase 1에서 10k trials × L1/L3/L5 측정으로 GRAM 경로 `vec`/`Gram` 폭�
 
 ## 5. 접근: B와 C **병행 구현 후 실측 비교**
 
-### 5.1. 확정: 기존 `ibz_t` 경로를 primary로 유지, C(fp)는 scaffold로 보존 (2026-04-21)
+### 5.1. 확정: **C(fp) 경로를 primary로 채택**, ibz/prealloc은 regression oracle로 보존 (2026-04-21)
 
-3-way 실측 벤치(§5.6) 결과 **어떤 레벨에서도 B/C 후보가 baseline을 이기지 못했다**. 특히 **C(fp)는 L1 Alg 2 기준 5.25× 퇴행**(trap-off 빌드에서도 4.65× 퇴행). 이에 따라 primary 결정은 다음과 같이 확정한다.
+**결정 기준 재정립** — 본 §5.1은 2026-04-21 오전 한 차례 "baseline 유지"로 확정했다가 동일 날짜 오후 뒤집은 이력이 있음. 뒤집은 이유: **첫 확정은 시간 퇴행을 primary 탈락 사유로 썼는데, 그게 Phase 2의 본래 기준이 아니었음**. 본 문서 §1·§3·§5.3은 처음부터 Phase 2 목표를 다음 4가지로 명시했다.
 
-- **Primary**: 기존 `quat_mlll_gram_ibz` (본체, `ibz_t`/GMP `mpz_*` 기반). 변경 없음.
-- **B (prealloc scaffold)**: C 구현 디버그용 reference oracle로 §5.5 상태 그대로 유지. `--prealloc` 플래그 및 `quat_mlll_gram_set_prealloc_mode()` 공개 API 유지.
-- **C (fp scaffold)**: `quat_fixed_precision.[hc]` + `quat_mlll_gram_fp` + dispatcher + overflow trap + `gram_fp_equivalence` 테스트 + `--fp` 벤치 플래그 유지. Runtime 기본값 `g_fp_mode = 0`, 프로덕션 opt-in 경로 없음.
-- **제거 대상**: 없음. scaffold 유지 비용이 현재 negligible이고 §5.7의 보존 목적(회귀 가드 / Lemma 3 런타임 감사 / 미래 재설계 지점)이 유효.
+1. `ibz_t`(GMP 동적) → **고정폭 스택 레이아웃**으로 전환 (heap-free).
+2. 폭이 Lemma 1 / Lemma 3 예산 안에 실제로 들어감을 **런타임에서 감사** (overflow trap).
+3. KLKL25 eprint 2025/1649의 "compact 연산이 고정폭에 실제로 들어간다"는 **contribution을 코드로 입증**.
+4. 미래 CT 방향(eprint 2025/2192)과 정렬되는 **타입 레이어 확보**.
+
+이 4개 기준은 모두 "ibz는 fp든 값이 어차피 들어가므로 시간 차이 X%면 어느 쪽이든 OK" 류의 **time-agnostic** 기준이다. 시간 퇴행은 언제나 논문 contribution의 trade-off로 수용되는 범주이지 primary 탈락 사유가 될 수 없음.
+
+**4개 기준으로 재평가**:
+
+| 기준 | baseline ibz | B prealloc | C fp |
+|---|:-:|:-:|:-:|
+| (1) Heap-free / stack | ✗ | ✗ (hint only, §5.5) | **✓** |
+| (2) Lemma 3 runtime 감사 | ✗ | ✗ | **✓** (trap, sweep 270 iter 0 발동) |
+| (3) Contribution 코드 입증 | ✗ | ✗ | **✓** (`quat_fp_vec_t`/`quat_fp_gram_t` + schoolbook) |
+| (4) CT 호환 여지 | ✗ | ✗ | **✓** (value-independent limb layout) |
+| 정확성 (equivalence) | ✓ (HNF oracle) | ✓ | ✓ (`gram_fp_equivalence` PASS) |
+
+→ **C(fp)가 4개 기준 모두 유일 만족. primary는 C.**
+
+**확정 사항**:
+
+- **Primary**: `quat_mlll_gram_fp` (fp body, 스택 고정폭 + schoolbook + overflow trap). `g_fp_mode = 1` 기본값.
+- **Regression oracle**: `quat_mlll_gram_ibz` (기존 ibz body). `set_fp_mode(0)`으로 opt-out 가능. 주 용도: fp 회귀 발생 시 교차 검증.
+- **B (prealloc)**: 이미 §5.5에서 primary 탈락 확정, scaffold로 유지. fp path와 독립이라 fp_mode=1일 때는 동작 안 함(ibz 경로 전용 hint). `--prealloc` 플래그는 ibz 성능 측정용으로 유지.
+- **시간 퇴행 수용 범위** (§5.6): L1 Alg 2 기준 fp/ibz = 5.25× (trap-off 4.65×). L3/L5는 동률. 이 수치는 **수용 trade-off**로 기록, primary 결정에 영향 없음. 퇴행 감소는 Phase 2 이후 재설계(size-reduce 1-limb fast path 등) 과제이며 본 결정과는 직교.
+- **제거 대상**: 없음.
 
 **변경 추적**:
 
-- 본 §5.1은 2026-04-21 이전 "초안"이었음. P2-B(§5.5) + P2-C-gram/overflow/sweep(§5.6) 실측 완료 후 "확정"으로 승격.
-- 이전 순서(B → C → 비교)는 그대로 수행됨. "선험적으로 primary를 못 박지 않는다"는 원칙도 유지 — 최종 선택은 §5.6 표에 근거.
+- 2026-04-21 오전: "baseline 유지" 확정. **근거가 시간 기준이라 폐기**.
+- 2026-04-21 오후: 본 §5.1로 재확정. fp primary + 시간은 trade-off 기록.
+- 이전 순서(B → C → 비교)는 그대로 수행됨. "선험적으로 primary를 못 박지 않는다"는 §5 원칙도 유지 — 최종 선택은 4개 기준 + §5.6 실측.
 
 ### 5.2. B를 먼저 구현하는 이유
 
@@ -150,21 +173,23 @@ B 후보 scaffold(`quat_mlll_gram` 진입부에서 `b[]`/`G[][]`/`X`/`tmp` 전�
 2. Alg 3 L1 퇴행 원인은 realloc 호출 비용 자체. `quat_mlll_gram` 1회 호출당 16·4(b) + 16·16(G) + 2(X,tmp) = 322 건의 `mpz_realloc2` 호출이 들어가고, L1 alg 3은 8 generator만 쓰기 때문에 MLLL 본체 작업량이 작다 → 322 prealloc 호출이 전체 시간의 큰 비중 차지. L3/L5 및 alg 2(16 generator)는 본체가 더 무거워서 322 호출이 묻힘.
 
 **결론**:
-- **B만으로는 Phase 2 목표(힙 할당 제거, 고정폭 성능 이득) 달성 불가**. 실측으로 "hint only"가 확인되었으므로 더 이상 B 튜닝에 시간 쓰지 않는다.
-- B scaffold는 C 구현의 reference oracle로 남긴다 (`quat_mlll_gram_set_prealloc_mode(0/1)`로 토글; 기본 0). C 구현 중 산출물이 B=1 출력과 비트 단위 동일해야 정상.
-- **primary는 C 쪽 가능성 높음**. 다만 C 구현 전에 최종 확정 금지 (P2-decide에서 3-way 비교 후 결정).
+- **B만으로는 Phase 2 목표(힙 제거) 달성 불가**. "hint only"가 실측 확인되었으므로 더 이상 B 튜닝에 시간 쓰지 않는다.
+- B scaffold는 ibz 경로(현재는 fp primary의 회귀 oracle) 내부에서 `mpz_realloc2` 효과를 단독 측정하는 도구로 남긴다. 런타임 flag `set_prealloc_mode(0/1)` 기본 0. **C 구현 중 출력을 B=1과 비교하는 디버그 flow도 유효함** — pairwise transitive equivalence 체인(§6.5 P2-equiv-a)에서 ibz self-consistency 검증 담당.
+- **primary는 C 쪽 가능성 높음**. 다만 C 구현 전에 최종 확정 금지 (P2-decide에서 §5.1 4개 기준 기반으로 결정).
 
 **Why**: 본 확인으로 Phase 2 전체 성공이 C 구현의 품질에 의존하는 상황이 됨. C가 실패하면 fixed-precision 전환 자체를 재고해야 하므로 P2-C-gram에서 보수적 구현(schoolbook + overflow trap) 우선, 최적화는 P2-decide 이후로 미룬다.
 
-### 5.6. 2026-04-21 P2-decide 실측: C(fp)도 baseline 대비 경쟁력 없음
+### 5.6. 2026-04-21 P2-decide 실측: 시간 trade-off 기록 (결정 기준 아님)
 
-C 구현(`quat_fixed_precision.[hc]` + `quat_mlll_gram_fp` + dispatcher + overflow trap) 완료 후 3-way 스윕 실행 (`bench_logs/p2_phase2_sweep/`, 30 iter/combo, L1/L3/L5 × alg2/alg3 × baseline/prealloc/fp).
+C 구현(`quat_fixed_precision.[hc]` + `quat_mlll_gram_fp` + dispatcher + overflow trap) 완료 후 3-way 스윕 실행 (`bench_logs/p2_phase2_sweep/`, 30 iter/combo, L1/L3/L5 × alg2/alg3 × baseline(ibz)/prealloc/fp).
+
+**본 표는 primary 결정이 아니라 "primary를 fp로 잡았을 때 감수해야 하는 시간 비용" 기록용.** 결정 기준은 §5.1 4개(heap-free / Lemma 3 감사 / contribution 입증 / CT 여지).
 
 **결과** (GRAM total ms, 30 iter 합, trap-on 기본 빌드):
 
-| Level | Mode | baseline | prealloc | fp       | fp/base |
+| Level | Mode | baseline(ibz) | prealloc | fp (primary) | fp/ibz |
 |---|---|---:|---:|---:|---:|
-| L1 | alg2 | 12.78 | 12.81 | **67.10** | **5.25×** |
+| L1 | alg2 | 12.78 | 12.81 | **67.10** | 5.25× |
 | L1 | alg3 |  0.33 |  0.46 |   0.60 | 1.82× |
 | L3 | alg2 | 20.09 | 19.45 |  19.79 | 0.98× |
 | L3 | alg3 |  0.34 |  0.34 |   0.38 | 1.12× |
@@ -178,26 +203,28 @@ C 구현(`quat_fixed_precision.[hc]` + `quat_mlll_gram_fp` + dispatcher + overfl
 | L1 | alg2 | 67.10 | 60.28 | ~10% (6.82 ms / 54 ms 퇴행) |
 | L1 | alg3 |  0.60 |  0.58 | 미미 |
 
-**왜 L1에서 퇴행**:
+**퇴행 원인 (L1 중심)**:
 - GMP `ibz_mul`/`ibz_add`는 operand가 1-limb(L1에선 size-reduce 이후 대부분)일 때 내부 dispatch로 `mpn_mul_1` 또는 1-limb special case로 빠진다.
-- 우리 schoolbook `fp_mul`은 항상 `nwords_vec × nwords_vec` (L1의 경우 5×5, 5×9) 전체 limb 작업을 한다 — 고정폭이라 dispatch 불가.
-- Overflow trap은 전체 퇴행의 ~10%에 불과하므로 제거해도 L1 문제 해결 안 됨.
+- 우리 schoolbook `fp_mul`은 항상 `nwords_vec × nwords_vec` (L1의 경우 5×5, 5×9) 전체 limb 작업 — 고정폭 설계상 dispatch 불가.
+- Overflow trap은 전체 퇴행의 ~10%에 불과 → trap 제거해도 L1 문제 해결 안 됨. 근본 원인은 schoolbook inner loop.
 
-**L3/L5는 비슷**: 1-limb special case가 덜 발동하므로 fp도 baseline에 근접하지만 결코 이기지는 못함.
+**L3/L5 동률**: 1-limb special case가 덜 발동하므로 fp도 baseline에 근접. fp가 크게 이기지도 지지도 않음.
 
-**결정 근거 요약**:
-- L1(프로덕션 hottest)에서 C는 명백한 regression → primary 승격 불가.
-- L3/L5에서 C는 baseline과 동률 → 승격 명분 없음.
-- B는 §5.5에서 이미 탈락.
-- 따라서 **primary = 기존 ibz_t 경로 유지**가 유일한 데이터 부합 결정.
+**Trade-off 수용 판단**:
+- L1 Alg 2의 5.25× 퇴행이 프로덕션 hot path(MLLL은 Alg 2 기준 전체 signing 시간의 O(ms) 수준)에 추가하는 절대 시간 ≈ 54 ms / 30 iter = **1.8 ms per call**. SQIsign 전체 signing 시간 대비 작은 비중.
+- Phase 2 이후 재설계(size-reduce 1-limb fast path inline 또는 `mpn_mul_1` bridge)로 완화 가능 — fp 타입 이미 자리 잡혀 있어 진입 비용 낮음 (§5.7 3번).
+- 4개 결정 기준(§5.1) 만족도가 절대적으로 높기에 수용.
 
-### 5.7. C(fp) scaffold를 그대로 두는 이유
+### 5.7. 회귀 oracle(ibz) + prealloc scaffold 보존 이유
 
-1. **회귀 가드**: `quat_test_mlll_gram_fp_equivalence`(테스트 모음에 상시 등록됨)가 ibz 경로와 fp 경로의 격자 출력을 비트 단위 비교. 장래 ibz 경로나 fp 경로 어느 한쪽이 회귀하면 이 테스트가 즉시 실패.
-2. **런타임 Lemma 3 감사**: fp 경로를 opt-in하면 `FP_CHECK_VEC`/`FP_CHECK_GRAM`가 각 mutation site에서 `(nwords-1)*64` 비트 예산 초과 시 `abort`. trap이 한 번이라도 발동하면 폭 표(§1) 또는 Lemma 3 논증이 틀렸다는 증거가 즉시 확보된다.
-3. **미래 재설계 landing spot**: size-reduce 내부 루프를 schoolbook→`mpn_mul_1` inlined 또는 `mul+narrow-sub` fused로 재설계할 경우 fp 타입 + bridge가 이미 자리 잡혀 있어 진입 비용 낮다.
+Primary는 fp지만 ibz body와 B prealloc scaffold는 **제거하지 않는다**. 이유:
 
-**유지 비용**: 파일 수 2개(`quat_fixed_precision.[hc]`) + `mlll_gram.c` 내 ~300줄 dispatcher/fp 본체 + 테스트 1개. 정적 flag `g_fp_mode = 0` 기본값이라 프로덕션은 어떤 경우에도 fp를 거치지 않는다. 유지보수 부담이 증가하면 재평가.
+1. **ibz = fp 회귀 oracle**: `quat_test_mlll_gram_fp_equivalence`(테스트 모음에 상시 등록됨)가 fp 경로 출력과 ibz 경로 출력을 비트 단위 비교. fp에 버그 들어가면 즉시 실패. `set_fp_mode(0)`으로 필요 시 임시 전환 가능.
+2. **런타임 Lemma 3 감사**: fp primary 자체가 감사 역할. `FP_CHECK_VEC`/`FP_CHECK_GRAM`가 각 mutation site에서 `(nwords-1)*64` 비트 예산 초과 시 `abort` — 한 번이라도 발동하면 폭 표(§1) 또는 Lemma 3 논증이 틀렸다는 증거가 즉시 확보. trap-on 기본 빌드에서 프로덕션이 이 감사를 상시 수행.
+3. **미래 재설계 landing spot**: §5.6 L1 퇴행 해결을 위해 size-reduce 내부 루프를 schoolbook→`mpn_mul_1` inlined 또는 `mul+narrow-sub` fused로 재설계하더라도 fp 타입 + bridge가 이미 자리 잡혀 있어 진입 비용 낮음. 그 시점에 ibz body 제거 여부 재평가.
+4. **B prealloc**: ibz body에 대한 hint-only 최적화. fp primary 하에서는 hot path 밖이라 유지/제거 중립. `--prealloc` 플래그는 ibz 벤치 도중 prealloc 단독 효과 측정용으로 남긴다.
+
+**유지 비용**: 파일 수 2개(`quat_fixed_precision.[hc]`) + `mlll_gram.c` 내 ibz body ~200줄(oracle) + fp body ~300줄(primary) + dispatcher ~30줄 + 테스트 2개. 런타임 기본값 `g_fp_mode = 1`이라 프로덕션은 fp 경로를 상시 거침. ibz body는 `--fp 0` / `set_fp_mode(0)` 호출 시에만 활성.
 
 ## 6. 구현 단계
 
@@ -258,27 +285,28 @@ C 구현(`quat_fixed_precision.[hc]` + `quat_mlll_gram_fp` + dispatcher + overfl
 
 ### 6.5. P2-equiv: 동치성 + 성능 비교 — 2026-04-21 완료 (커밋 `97eb079` 및 sweep 아티팩트)
 
-- [x] **P2-equiv-a** 3-way 대신 **2-way + transitive** 구조 채택:
-  - `quat_test_mlll_gram_equivalence`: HNF reference ↔ ibz GRAM baseline (기존, 유지).
-  - `quat_test_mlll_gram_prealloc_equivalence`: ibz GRAM ↔ B prealloc (§6.1, 유지).
-  - `quat_test_mlll_gram_fp_equivalence`: ibz GRAM ↔ C fp (신규, PASS — p=7/19/11 gram_equivalence + L5 random 16-gen).
-  - 이 세 테스트 조합으로 HNF ↔ ibz ↔ B ↔ C 4경로 equivalence가 transitively 보장됨. "한 테스트에서 4-way" 대신 pairwise가 실패 localize에 더 유리.
+- [x] **P2-equiv-a** 3-way 대신 **2-way + transitive** 구조 채택 (fp_mode=1 primary 기준 재해석):
+  - `quat_test_mlll_gram_equivalence`: Cohen(`quat_mlll`) ↔ GRAM dispatcher (기본 fp). → Cohen↔fp primary equivalence.
+  - `quat_test_mlll_gram_prealloc_equivalence`: `set_fp_mode(0)` 명시 후 ibz+prealloc-off ↔ ibz+prealloc-on. → ibz self-consistency 확인.
+  - `quat_test_mlll_gram_fp_equivalence`: `set_fp_mode(1)` 명시 guard + L5 random 16-gen case 확장. fp 기본값이 바뀌어도 이 테스트는 고정됨.
+  - `quat_test_lideal_create_gram_equivalence`: HNF ↔ GRAM dispatcher (L5 real prime, 25 trials). → HNF↔fp primary equivalence.
+  - 조합으로 HNF ↔ Cohen ↔ fp / ibz ↔ ibz+prealloc 4경로 equivalence가 transitively 보장됨. 실패 localize 가능.
 - [x] **P2-equiv-b** Sweep 30 iter × 9 조합 (L1/L3/L5 × alg2/alg3 × fp) 실행, trap 발동 0건. `ibz` ↔ `fp` 출력은 매 회 비트 동일.
 - [x] **P2-equiv-c** 3-way 성능 비교표는 §5.6 표로 확정 (HNF 경로 시간은 MLLL 컬럼 참고). 원래 계획의 "realloc 횟수 측정"은 §5.5에서 이미 mpz_realloc2가 힙 제거 보장 없음이 확증되어 **별도 프로파일링 수행 moot**.
 
 ### 6.6. P2-decide: 최종 primary 결정 및 문서화 — 2026-04-21 완료
 
-- [x] **P2-decide-a** §5.6 표 근거로 **baseline ibz_t 경로를 primary로 최종 채택**. B/C 모두 승격 조건(≥1 레벨 유의 win) 미달.
-- [x] **P2-decide-b** 본 문서 §5.1 "결정" 확정 + §5.6·§5.7 신설.
-- [x] **P2-decide-c** 탈락 경로 제거 여부: **모두 유지**. B는 reference oracle, C는 회귀 가드 + 런타임 Lemma 3 감사 + 미래 재설계 landing spot (§5.7). 유지 비용 negligible. §7-4 동시 해결.
-- [x] **P2-decide-d** `PLAN_KO.md` Phase 2 완료 체크 반영. Phase 3 착수 조건은 "Phase 2 baseline 경로가 그대로 Phase 3의 primary" — 추가 blocker 없음.
+- [x] **P2-decide-a** §5.1의 4개 기준(heap-free / Lemma 3 감사 / contribution 입증 / CT 여지)에 근거해 **C(fp) 경로를 primary로 최종 채택**. 시간 퇴행(§5.6)은 수용 trade-off로 기록, 결정 기준 아님. `g_fp_mode` 기본값 0 → **1**로 변경.
+- [x] **P2-decide-b** 본 문서 §5.1 "결정" 재확정(오전 baseline → 오후 fp로 flip) + §5.6 "trade-off 기록" 재해석 + §5.7 "oracle 보존" 재작성.
+- [x] **P2-decide-c** 탈락 경로 제거 여부: **모두 유지**. ibz body는 fp 회귀 oracle, B prealloc은 ibz 서브튜닝 도구. 유지 비용 negligible. §7-4 동시 해결.
+- [x] **P2-decide-d** `PLAN_KO.md` Phase 2 완료 체크 반영. Phase 3는 fp primary 위에 직접 쌓는다 — 추가 blocker 없음.
 
 ## 7. 열린 질문 / 검증 필요
 
 1. **Signed 표현** — **2026-04-21 해결 (§6.2 P2-C-types-c)**. Storage는 two's complement, multiplication만 내부적으로 sign-magnitude. Add/sub hot loop에서 분기 없음이 결정 근거.
 2. **Division 구현**: Cohen 점화식의 exact div (`num = (d[s+1]·num − lam²) / d[s]`)가 필요. 단, 현재 `quat_mlll_gram`은 L² 기반이라 division은 dpe(float) 경로에서만 발생하고 integer exact division은 사용하지 않음. Cohen 경로(`mlll.c`)에만 필요 — Phase 2 scope 밖으로 분류. **재검토: P2-C는 GRAM만 대상이므로 이 열린 질문은 Phase 2에서 드롭.**
 3. **레벨별 코드 복제 vs generic** — **2026-04-21 해결 (§6.2)**. 런타임 분기 + 최대폭(L5) stack array. Compile-time 분기는 현재 quaternion 레이어가 단일 generic 빌드라 부적합.
-4. **B 또는 C 중 탈락 경로 제거 시점** — **2026-04-21 해결 (§5.1, §5.7, §6.6-c)**. §5.6 sweep 결과로 **B·C 둘 다 primary 탈락, baseline ibz_t 유지**가 확정됨. B와 C 둘 다 scaffold로 보존 (B는 reference oracle, C는 회귀 가드 + Lemma 3 runtime 감사 + 미래 재설계 landing spot). `#ifdef LEGACY_*` 플래그 도입 없이 각 경로는 런타임 flag(`set_prealloc_mode`/`set_fp_mode`)로 opt-in하며 기본값 0. 유지 비용 증가가 관측되면 재평가 대상.
+4. **탈락 경로 제거 시점** — **2026-04-21 해결 (§5.1, §5.7, §6.6-c)**. Primary는 **C(fp)** 로 확정(§5.1 4개 기준 유일 만족). ibz body는 fp 회귀 oracle, B prealloc은 ibz 서브튜닝 도구로 유지. `#ifdef LEGACY_*` 플래그 도입 없이 런타임 flag(`set_fp_mode` 기본 1, `set_prealloc_mode` 기본 0)로 opt-out/opt-in. 유지 비용 증가가 관측되면 재평가 대상.
 5. **Cohen 경로 유지 여부**: 현재 memory `project_sqisign_mlll.md`에서도 언급된 열린 질문. Cohen은 Lemma 3 밖이라 고정폭 불가 → Phase 2 종료 시점에 제거 또는 `#ifdef QUAT_MLLL_COHEN_DEBUG` 로 감싸기. **결정 보류** (Phase 2 scope 밖). Phase 3 착수 전 재검토.
 6. **Overflow trap 런타임 토글**: 현재 `MLLL_FP_NO_OVERFLOW_CHECK`는 **컴파일 타임** 매크로. 벤치/감사 도중 toggle 하려면 재빌드 필요. Phase 2에서는 trap-on(기본) 1회 + trap-off 1회 재빌드로 충분했으나, 향후 fp 경로를 런타임 opt-in으로 쓰며 trap만 개별 토글해야 할 상황이 오면 `g_fp_trap_mode` 전역 flag + macro를 `if (g_fp_trap_mode) { ... }` 형태로 전환. **현재는 보류**, 실수요 발생 시 착수.
 
