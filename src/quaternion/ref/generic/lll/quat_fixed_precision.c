@@ -337,32 +337,115 @@ quat_fp_gram_get_ibz(ibz_t *dst, const quat_fp_gram_t *src,
     fp_limbs_get_ibz(dst, src->limbs, w->nwords_gram);
 }
 
-/* ---------- Remaining stubs (P2-C-gram step 2+) ---------- */
+void
+quat_fp_tmp_get_ibz(ibz_t *dst, const quat_fp_tmp_t *src,
+                    const quat_fp_widths_t *w)
+{
+    fp_limbs_get_ibz(dst, src->limbs, w->nwords_tmp);
+}
+
+/* ---------- Multiplication (schoolbook, sign-magnitude internally) ----------
+ *
+ * The hot-loop product in `mlll_gram.c` is always `X * G[i][j]` or
+ * `X * b[i][j]`, with operand widths known at compile time. 1st pass here is
+ * a straight schoolbook `an × bn → rn` (rn == nwords_tmp) — no Karatsuba, no
+ * mpn wrapping. Step 2b of P2-C-gram re-runs a micro-bench to decide whether
+ * `mpn_mul` is worth the call overhead; for now the schoolbook keeps the
+ * path dependency-free and easy to reason about during the mlll_gram cut-over.
+ */
+
+static void
+fp_limbs_mul_unsigned(digit_t *r, unsigned rn,
+                      const digit_t *a, unsigned an,
+                      const digit_t *b, unsigned bn)
+{
+    assert(rn >= an + bn);
+    for (unsigned i = 0; i < rn; i++) r[i] = 0;
+    for (unsigned i = 0; i < an; i++) {
+        digit_t ai = a[i];
+        digit_t carry = 0;
+        for (unsigned j = 0; j < bn; j++) {
+            __uint128_t prod = (__uint128_t)ai * (__uint128_t)b[j];
+            __uint128_t sum  = (__uint128_t)r[i + j] + prod + carry;
+            r[i + j] = (digit_t)sum;
+            carry    = (digit_t)(sum >> 64);
+        }
+        r[i + bn] += carry;
+    }
+}
+
+/* Take magnitude of `src` (an signed 2's comp limbs) into `dst`; returns
+ * sign (0 = non-negative, 1 = negative). `dst` must have capacity >= an. */
+static int
+fp_limbs_magnitude(digit_t *dst, const digit_t *src, unsigned an)
+{
+    int negative = (src[an - 1] >> 63) & 1;
+    for (unsigned i = 0; i < an; i++) dst[i] = src[i];
+    if (negative)
+        fp_limbs_negate(dst, an);
+    return negative;
+}
+
+/* r = a * b, signed. rn must hold the full product plus sign room. */
+static void
+fp_limbs_mul_signed(digit_t *r, unsigned rn,
+                    const digit_t *a, unsigned an,
+                    const digit_t *b, unsigned bn)
+{
+    digit_t mag_a[NWORDS_QUAT_TMP_MAX] = {0};
+    digit_t mag_b[NWORDS_QUAT_TMP_MAX] = {0};
+    assert(an <= NWORDS_QUAT_TMP_MAX && bn <= NWORDS_QUAT_TMP_MAX);
+
+    int sa = fp_limbs_magnitude(mag_a, a, an);
+    int sb = fp_limbs_magnitude(mag_b, b, bn);
+
+    fp_limbs_mul_unsigned(r, rn, mag_a, an, mag_b, bn);
+
+    if (sa ^ sb)
+        fp_limbs_negate(r, rn);
+}
 
 void
 quat_fp_tmp_mul_vec_vec(quat_fp_tmp_t *r, const quat_fp_vec_t *a,
                         const quat_fp_vec_t *b, const quat_fp_widths_t *w)
 {
-    (void)r; (void)a; (void)b; (void)w; fp_stub(__func__);
+    fp_limbs_mul_signed(r->limbs, w->nwords_tmp,
+                        a->limbs, w->nwords_vec,
+                        b->limbs, w->nwords_vec);
 }
+
 void
 quat_fp_tmp_mul_vec_gram(quat_fp_tmp_t *r, const quat_fp_vec_t *a,
                          const quat_fp_gram_t *b, const quat_fp_widths_t *w)
 {
-    (void)r; (void)a; (void)b; (void)w; fp_stub(__func__);
+    fp_limbs_mul_signed(r->limbs, w->nwords_tmp,
+                        a->limbs, w->nwords_vec,
+                        b->limbs, w->nwords_gram);
+}
+
+/* ---------- Narrow subtract: target -= tmp (low nwords_target limbs) ------
+ *
+ * Invariant (enforced by Lemma 3 in callers): the tmp value being subtracted
+ * already fits within the narrower width after the subtraction — i.e. its
+ * high limbs match the sign extension of the low part. If that invariant
+ * is violated, the final result is wrong; P2-overflow adds a runtime trap
+ * so bench/equiv runs surface the breach loudly.
+ *
+ * Mechanically this is the same as `fp_limbs_sub` with the narrow nwords;
+ * low `nwords_target` limbs of tmp alias the narrow operand. */
+
+void
+quat_fp_vec_sub_tmp(quat_fp_vec_t *r, const quat_fp_tmp_t *t,
+                    const quat_fp_widths_t *w)
+{
+    fp_limbs_sub(r->limbs, r->limbs, t->limbs, w->nwords_vec);
 }
 
 void
 quat_fp_gram_sub_tmp(quat_fp_gram_t *r, const quat_fp_tmp_t *t,
                      const quat_fp_widths_t *w)
 {
-    (void)r; (void)t; (void)w; fp_stub(__func__);
-}
-void
-quat_fp_vec_sub_tmp(quat_fp_vec_t *r, const quat_fp_tmp_t *t,
-                    const quat_fp_widths_t *w)
-{
-    (void)r; (void)t; (void)w; fp_stub(__func__);
+    fp_limbs_sub(r->limbs, r->limbs, t->limbs, w->nwords_gram);
 }
 
 void

@@ -187,6 +187,9 @@ void quat_fp_vec_get_ibz(ibz_t *dst, const quat_fp_vec_t *src,
                          const quat_fp_widths_t *w);
 void quat_fp_gram_get_ibz(ibz_t *dst, const quat_fp_gram_t *src,
                           const quat_fp_widths_t *w);
+/* tmp width (used in equivalence tests for mul results). */
+void quat_fp_tmp_get_ibz(ibz_t *dst, const quat_fp_tmp_t *src,
+                         const quat_fp_widths_t *w);
 
 /* ---------- dpe bridge (for L² Cholesky computed from the fixed Gram) ------ */
 
