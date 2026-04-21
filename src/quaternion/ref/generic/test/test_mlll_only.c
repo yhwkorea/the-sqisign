@@ -59,6 +59,12 @@ int main(void)
     printf("gram_prealloc_equivalence done (res=%d)\n", res);
     fflush(stdout);
 
+    printf("Starting MLLL test: fp_arith_vs_ibz...\n");
+    fflush(stdout);
+    res |= quat_test_fp_arith_vs_ibz();
+    printf("fp_arith_vs_ibz done (res=%d)\n", res);
+    fflush(stdout);
+
     printf("Starting MLLL test: all_zero_generators...\n");
     fflush(stdout);
     res |= quat_test_mlll_all_zero_generators();

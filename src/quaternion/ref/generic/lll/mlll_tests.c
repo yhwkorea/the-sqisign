@@ -14,6 +14,7 @@
 #include "internal.h"
 #include "lll_internals.h"
 #include "mlll_internals.h"
+#include "quat_fixed_precision.h"
 #include "quaternion_tests.h"
 #include <rng.h>
 
@@ -1075,6 +1076,197 @@ quat_test_mlll_rank_deficient(void)
     return res;
 }
 
+/* ========== Phase 2 candidate C (fixed-precision) unit tests ==========
+ *
+ * These exercise the `quat_fp_*` API in `quat_fixed_precision.c` without
+ * touching the MLLL loop — goal is to lock in add/sub + ibz_t bridge
+ * correctness before the `mlll_gram.c` cut-over lands. Each width tier
+ * (L1/L3/L5) gets 40 randomized trials plus explicit edge cases. */
+
+static int
+fp_arith_at_width(const char *label, const quat_fp_widths_t *w, int ntrials)
+{
+    int res = 0;
+    ibz_t a, b, ref, got, bound, neg_bound;
+    ibz_init(&a); ibz_init(&b);
+    ibz_init(&ref); ibz_init(&got);
+    ibz_init(&bound); ibz_init(&neg_bound);
+
+    quat_fp_vec_t va, vb, vc;
+    quat_fp_gram_t ga, gb, gc;
+
+    /* Stable seed per label. */
+    unsigned char seed[48];
+    for (int i = 0; i < 48; i++)
+        seed[i] = (unsigned char)((i * 7) ^ (unsigned)label[0]);
+    randombytes_init(seed, NULL, 256);
+
+    /* ---- vec path ---- */
+    int max_vec_bits = (int)(w->nwords_vec * 64) - 2; /* sign + add carry */
+    for (int t = 0; t < ntrials; t++) {
+        int bits = 1 + ((t * 17) % max_vec_bits);
+        ibz_pow(&bound, &ibz_const_two, (uint32_t)bits);
+        ibz_sub(&bound, &bound, &ibz_const_one);
+        ibz_neg(&neg_bound, &bound);
+        ibz_rand_interval(&a, &neg_bound, &bound);
+        ibz_rand_interval(&b, &neg_bound, &bound);
+
+        if (!quat_fp_vec_set_ibz(&va, &a, w) ||
+            !quat_fp_vec_set_ibz(&vb, &b, w)) {
+            printf("  FAIL: %s vec set_ibz (bits %d)\n", label, bits);
+            res = 1; goto done;
+        }
+        quat_fp_vec_get_ibz(&got, &va, w);
+        if (ibz_cmp(&a, &got) != 0) {
+            printf("  FAIL: %s vec roundtrip (bits %d)\n", label, bits);
+            res = 1; goto done;
+        }
+        quat_fp_vec_add(&vc, &va, &vb, w);
+        quat_fp_vec_get_ibz(&got, &vc, w);
+        ibz_add(&ref, &a, &b);
+        if (ibz_cmp(&ref, &got) != 0) {
+            printf("  FAIL: %s vec add (bits %d)\n", label, bits);
+            res = 1; goto done;
+        }
+        quat_fp_vec_sub(&vc, &va, &vb, w);
+        quat_fp_vec_get_ibz(&got, &vc, w);
+        ibz_sub(&ref, &a, &b);
+        if (ibz_cmp(&ref, &got) != 0) {
+            printf("  FAIL: %s vec sub (bits %d)\n", label, bits);
+            res = 1; goto done;
+        }
+        int fp_bits = quat_fp_vec_bitsize(&va, w);
+        int ibz_bits = ibz_bitsize(&a);
+        if (fp_bits != ibz_bits) {
+            printf("  FAIL: %s vec bitsize mismatch (fp=%d ibz=%d)\n",
+                   label, fp_bits, ibz_bits);
+            res = 1; goto done;
+        }
+    }
+
+    /* ---- gram path ---- */
+    int max_gram_bits = (int)(w->nwords_gram * 64) - 2;
+    for (int t = 0; t < ntrials; t++) {
+        int bits = 1 + ((t * 23) % max_gram_bits);
+        ibz_pow(&bound, &ibz_const_two, (uint32_t)bits);
+        ibz_sub(&bound, &bound, &ibz_const_one);
+        ibz_neg(&neg_bound, &bound);
+        ibz_rand_interval(&a, &neg_bound, &bound);
+        ibz_rand_interval(&b, &neg_bound, &bound);
+
+        if (!quat_fp_gram_set_ibz(&ga, &a, w) ||
+            !quat_fp_gram_set_ibz(&gb, &b, w)) {
+            printf("  FAIL: %s gram set_ibz (bits %d)\n", label, bits);
+            res = 1; goto done;
+        }
+        quat_fp_gram_get_ibz(&got, &ga, w);
+        if (ibz_cmp(&a, &got) != 0) {
+            printf("  FAIL: %s gram roundtrip (bits %d)\n", label, bits);
+            res = 1; goto done;
+        }
+        quat_fp_gram_add(&gc, &ga, &gb, w);
+        quat_fp_gram_get_ibz(&got, &gc, w);
+        ibz_add(&ref, &a, &b);
+        if (ibz_cmp(&ref, &got) != 0) {
+            printf("  FAIL: %s gram add (bits %d)\n", label, bits);
+            res = 1; goto done;
+        }
+        quat_fp_gram_sub(&gc, &ga, &gb, w);
+        quat_fp_gram_get_ibz(&got, &gc, w);
+        ibz_sub(&ref, &a, &b);
+        if (ibz_cmp(&ref, &got) != 0) {
+            printf("  FAIL: %s gram sub (bits %d)\n", label, bits);
+            res = 1; goto done;
+        }
+        int fp_bits = quat_fp_gram_bitsize(&ga, w);
+        int ibz_bits = ibz_bitsize(&a);
+        if (fp_bits != ibz_bits) {
+            printf("  FAIL: %s gram bitsize mismatch (fp=%d ibz=%d)\n",
+                   label, fp_bits, ibz_bits);
+            res = 1; goto done;
+        }
+    }
+
+done:
+    (void)vb; (void)gb;  /* silence unused when loops break early */
+    ibz_finalize(&a); ibz_finalize(&b);
+    ibz_finalize(&ref); ibz_finalize(&got);
+    ibz_finalize(&bound); ibz_finalize(&neg_bound);
+    return res;
+}
+
+int
+quat_test_fp_arith_vs_ibz(void)
+{
+    int res = 0;
+    quat_fp_widths_t w;
+
+    w.nwords_vec  = NWORDS_QUAT_VEC_L1;
+    w.nwords_gram = NWORDS_QUAT_GRAM_L1;
+    w.nwords_tmp  = NWORDS_QUAT_TMP_L1;
+    res |= fp_arith_at_width("L1", &w, 40);
+
+    w.nwords_vec  = NWORDS_QUAT_VEC_L3;
+    w.nwords_gram = NWORDS_QUAT_GRAM_L3;
+    w.nwords_tmp  = NWORDS_QUAT_TMP_L3;
+    res |= fp_arith_at_width("L3", &w, 40);
+
+    w.nwords_vec  = NWORDS_QUAT_VEC_L5;
+    w.nwords_gram = NWORDS_QUAT_GRAM_L5;
+    w.nwords_tmp  = NWORDS_QUAT_TMP_L5;
+    res |= fp_arith_at_width("L5", &w, 40);
+
+    /* Edge cases at L1 vec width. */
+    quat_fp_widths_t lw;
+    lw.nwords_vec  = NWORDS_QUAT_VEC_L1;
+    lw.nwords_gram = NWORDS_QUAT_GRAM_L1;
+    lw.nwords_tmp  = NWORDS_QUAT_TMP_L1;
+
+    ibz_t z, one, neg_one, big, big_neg, got;
+    ibz_init(&z);       ibz_set(&z, 0);
+    ibz_init(&one);     ibz_set(&one, 1);
+    ibz_init(&neg_one); ibz_set(&neg_one, -1);
+    ibz_init(&got);
+    ibz_init(&big);     ibz_pow(&big, &ibz_const_two, 200);
+    ibz_sub(&big, &big, &ibz_const_one);
+    ibz_init(&big_neg); ibz_neg(&big_neg, &big);
+
+    const ibz_t *cases[] = { &z, &one, &neg_one, &big, &big_neg };
+    const char *names[] = { "zero", "one", "neg_one", "big_pos", "big_neg" };
+    quat_fp_vec_t v;
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        if (!quat_fp_vec_set_ibz(&v, cases[i], &lw)) {
+            printf("  FAIL: edge case %s set_ibz\n", names[i]); res = 1; continue;
+        }
+        quat_fp_vec_get_ibz(&got, &v, &lw);
+        if (ibz_cmp(cases[i], &got) != 0) {
+            printf("  FAIL: edge case %s roundtrip\n", names[i]); res = 1;
+        }
+    }
+
+    ibz_finalize(&z); ibz_finalize(&one); ibz_finalize(&neg_one);
+    ibz_finalize(&big); ibz_finalize(&big_neg); ibz_finalize(&got);
+
+    /* widths_from_alg sanity: tiny alg (p=7) should land in L1 tier. */
+    quat_alg_t alg;
+    quat_alg_init_set_ui(&alg, 7);
+    quat_fp_widths_t aw;
+    if (!quat_fp_widths_from_alg(&aw, &alg)) {
+        printf("  FAIL: widths_from_alg (tiny alg should match L1)\n");
+        res = 1;
+    } else if (aw.nwords_vec != NWORDS_QUAT_VEC_L1 ||
+               aw.nwords_gram != NWORDS_QUAT_GRAM_L1) {
+        printf("  FAIL: widths_from_alg L1 mismatch (vec=%u gram=%u)\n",
+               aw.nwords_vec, aw.nwords_gram);
+        res = 1;
+    }
+    quat_alg_finalize(&alg);
+
+    if (res == 0)
+        printf("  PASS: quat_test_fp_arith_vs_ibz (L1/L3/L5, 40 trials + edges)\n");
+    return res;
+}
+
 /* ========== Test runner ========== */
 
 int
@@ -1092,6 +1284,7 @@ quat_test_mlll_all(void)
     res |= quat_test_mlll_gram_equivalence();
     res |= quat_test_lideal_create_gram_equivalence();
     res |= quat_test_mlll_gram_prealloc_equivalence();
+    res |= quat_test_fp_arith_vs_ibz();
     res |= quat_test_mlll_all_zero_generators();
     res |= quat_test_mlll_single_generator();
     res |= quat_test_mlll_two_generators_dependent();
