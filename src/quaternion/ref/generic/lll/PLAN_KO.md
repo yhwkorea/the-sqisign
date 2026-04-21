@@ -55,25 +55,24 @@
 
 **Why**: 감사 C1 픽스로 Cohen path max가 3028→3543 bits로 이동. L3/L5도 같은 폭 누락 가능성 있어 재측정. GRAM 경로는 거의 영향 없음을 실측 확인 — Phase 2 typedef 폭 그대로 사용 가능.
 
-### Phase 2 — Fixed-precision 전환 (3-5일)
+### Phase 2 — Fixed-precision 전환 (~11-14일, 병행 구현 + 실측 비교)
 
-**목표**: `ibz_t`(GMP 동적) → 레벨별 고정폭 정수로 내부 산술 전환. Constant-time 가능성 확보 + 힙 할당 제거.
+**목표**: `ibz_t`(GMP 동적) → 고정폭 산술로 내부 전환. B와 C 둘 다 구현하고 실측으로 primary 결정. 상세: [FIXED_PRECISION_DECISION_KO.md](FIXED_PRECISION_DECISION_KO.md)
 
-- [ ] **P2-1** 백엔드 선택 결정 문서 (별도 `FIXED_PRECISION_DECISION_KO.md`)
-  - 후보 A: GMP `mpn_*` lowlevel API (익숙, heap 유지)
-  - 후보 B: `ibz_t` + `mpz_realloc2` (최소 변경, heap 유지)
-  - 후보 C: bare `uint64_t[N]` (constant-time 가능, 재작성 많음)
-- [ ] **P2-2** 레벨별 typedef 정의 (`quat_b_vec_Lk_t`, `quat_b_gram_Lk_t`)
+- [x] **P2-1** 백엔드 결정 문서 초안 — `FIXED_PRECISION_DECISION_KO.md` (2026-04-22). A 탈락, B와 C 병행 구현 방침 확정.
+- [ ] **P2-B** B 구현: `ibz_t` + `mpz_realloc2` prealloc scaffold. 10k trials 벤치 + 동치성 검증.
+- [ ] **P2-C-types** Per-level typedef 정의 (`quat_b_vec_L{k}_t`, `quat_b_gram_L{k}_t`) + signed 표현 결정.
   - L1: vec 5×u64(320b), Gram 9×u64(576b)
   - L3: vec 7×u64(448b), Gram 13×u64(832b)
   - L5: vec 9×u64(576b), Gram 17×u64(1088b)
-- [ ] **P2-3** `quat_mlll_gram` 내부 산술을 typedef로 치환 (GRAM 경로만 우선)
-- [ ] **P2-4** Overflow trap: B* 초과 시 `abort()` (릴리즈 빌드에서도 활성)
-- [ ] **P2-5** 동치성 테스트: 기존 `ibz_t` 경로와 결과 일치 (`quat_test_mlll_gram_equivalence` 확장, trials 100+)
+- [ ] **P2-C-gram** GRAM 내부 산술 C 구현 (mul/division 구현 선택 포함).
+- [ ] **P2-overflow** C 경로 overflow trap (B* 초과 시 abort, 릴리즈 빌드에서도 활성).
+- [ ] **P2-equiv** 3-way 동치성 + 벤치 비교 (HNF / ibz_t GRAM / B / C).
+- [ ] **P2-decide** 실측 결과로 primary 최종 결정 + 결정 문서 업데이트.
 
-**Why**: 논문 contribution의 핵심이 "compact 연산이 고정폭에 실제로 들어간다"는 실증. 현 구현은 여전히 `ibz_t`라 bitsize만 작을 뿐 메모리 레이아웃은 동일. 고정폭 전환 후에야 성능/메모리 이득이 드러남.
+**Why**: 논문 contribution의 핵심이 "compact 연산이 고정폭에 실제로 들어간다"는 실증. 현 구현은 여전히 `ibz_t`라 bitsize만 작을 뿐 메모리 레이아웃은 동일. B는 힙 할당 빈도 감소(hint), C는 진짜 stack 고정폭 — 실측 비교로 primary 결정.
 
-**전제**: Phase 1 완료 (typedef 폭이 L3/L5 재측정으로 확정되어야 함).
+**전제**: Phase 1 완료 (typedef 폭이 L3/L5 재측정으로 확정됨). ✅
 
 ### Phase 3 — Alg 1/4 MLLL 버전 구현 (1-2주)
 
@@ -132,9 +131,9 @@
 | Phase | 기간 | 누적 | 상태 |
 |---|---|---|---|
 | P1 측정 | ~2d | 2026-04-21 | ✅ 완료 |
-| P2 fixed-precision | ~5d | 2026-04-26 | 진행 예정 (백엔드 결정 문서 착수) |
-| P3 Alg 1/4 | ~2w | 2026-05-10 | |
-| P4 SQIsign 통합 | ~3w | 2026-05-31 | |
-| P5 PR 분리 | ~1w | 2026-06-07 | |
+| P2 fixed-precision | ~11-14d | ~2026-05-06 | P2-1 완료 (결정 문서 초안), P2-B 착수 예정 |
+| P3 Alg 1/4 | ~2w | ~2026-05-20 | |
+| P4 SQIsign 통합 | ~3w | ~2026-06-10 | |
+| P5 PR 분리 | ~1w | ~2026-06-17 | |
 
 실제 일정은 Phase 2 백엔드 결정과 Alg 1 기존 구현 조사 결과에 따라 크게 달라짐.
