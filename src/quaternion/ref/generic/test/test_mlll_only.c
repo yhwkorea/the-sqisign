@@ -71,6 +71,12 @@ int main(void)
     printf("fp_mul_vs_ibz done (res=%d)\n", res);
     fflush(stdout);
 
+    printf("Starting MLLL test: gram_fp_equivalence...\n");
+    fflush(stdout);
+    res |= quat_test_mlll_gram_fp_equivalence();
+    printf("gram_fp_equivalence done (res=%d)\n", res);
+    fflush(stdout);
+
     printf("Starting MLLL test: all_zero_generators...\n");
     fflush(stdout);
     res |= quat_test_mlll_all_zero_generators();

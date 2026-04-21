@@ -463,15 +463,31 @@ quat_fp_gram_check_overflow(const quat_fp_gram_t *g,
     (void)g; (void)w; (void)site; fp_stub(__func__);
 }
 
+/* ---------- dpe bridge ----------
+ *
+ * dpe only exposes conversion through `mpz_t` (dpe_set_z / dpe_get_z), so we
+ * route through a caller-supplied `ibz_t scratch`. This keeps the bridge
+ * allocation-free per call: the caller pre-allocates one `ibz_t` at the top
+ * of `quat_mlll_gram_fp` and reuses it for every size-reduce and Cholesky
+ * row rebuild. Measured pattern in Phase 1: `dpe_set_z` dominates inner-
+ * loop allocations when ibz_t storage grows lazily; with a reused scratch
+ * the mpz grows once to the max observed magnitude and stays there.
+ *
+ * A direct gram → (mantissa, exp) path is possible (shift top 53 bits of
+ * magnitude into a double) but postponed — the bench in P2-C-gram-c will
+ * tell us whether the scratch path is actually hot enough to warrant it.
+ */
 void
 quat_fp_gram_to_dpe(dpe_t dst, const quat_fp_gram_t *src,
-                    const quat_fp_widths_t *w)
+                    const quat_fp_widths_t *w, ibz_t *scratch)
 {
-    (void)dst; (void)src; (void)w; fp_stub(__func__);
+    quat_fp_gram_get_ibz(scratch, src, w);
+    dpe_set_z(dst, *scratch);
 }
 int
 quat_fp_vec_from_dpe_round(quat_fp_vec_t *dst, dpe_t src,
-                           const quat_fp_widths_t *w)
+                           const quat_fp_widths_t *w, ibz_t *scratch)
 {
-    (void)dst; (void)src; (void)w; fp_stub(__func__); return 0;
+    dpe_get_z(*scratch, src);
+    return quat_fp_vec_set_ibz(dst, scratch, w);
 }
