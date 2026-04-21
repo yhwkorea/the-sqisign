@@ -896,6 +896,118 @@ cleanup:
     return res;
 }
 
+/* ========== quat_mlll_gram fp path vs ibz path equivalence ==========
+ *
+ * Phase 2 candidate C: `g_fp_mode` routes `quat_mlll_gram` through the
+ * stack fixed-precision body (`quat_mlll_gram_fp`). Output must match the
+ * `ibz_t` body (= `quat_mlll_gram` with fp_mode = 0) under the Lemma 3
+ * invariant. Reuses the three `compare_mlll_vs_gram` cases from the
+ * gram-vs-mlll test so the fp path is exercised against the same
+ * canonical inputs, then adds an L5-width ideal trial to cover the 17-
+ * limb Gram path which the tiny-p cases cannot reach.
+ */
+int
+quat_test_mlll_gram_fp_equivalence(void)
+{
+    int res = 0;
+    int saved_fp = quat_mlll_gram_get_fp_mode();
+    quat_mlll_gram_set_fp_mode(1);
+
+    /* Reuse the 3 gram_equivalence cases under fp_mode = 1. */
+    {
+        quat_alg_t alg;
+        quat_alg_init_set_ui(&alg, 7);
+        ibz_vec_4_t gens[6];
+        for (int i = 0; i < 6; i++) ibz_vec_4_init(&gens[i]);
+        ibz_set(&gens[0][0], 1);
+        ibz_set(&gens[1][1], 1);
+        ibz_set(&gens[2][2], 1);
+        ibz_set(&gens[3][3], 1);
+        ibz_set(&gens[4][0], 1); ibz_set(&gens[4][1], 1);
+        ibz_set(&gens[5][2], 2);
+        res |= compare_mlll_vs_gram(gens, 6, &alg, "fp_dependent_6gen");
+        for (int i = 0; i < 6; i++) ibz_vec_4_finalize(&gens[i]);
+        quat_alg_finalize(&alg);
+    }
+
+    {
+        quat_alg_t alg;
+        quat_alg_init_set_ui(&alg, 19);
+        ibz_vec_4_t gens[8];
+        for (int i = 0; i < 8; i++) ibz_vec_4_init(&gens[i]);
+        int vals[8][4] = {
+            {3, 1, 0, 2}, {1, 4, 2, 0},
+            {0, 2, 3, 1}, {2, 0, 1, 4},
+            {5, 3, 1, 0}, {1, 1, 2, 2},
+            {4, 0, 0, 3}, {0, 5, 1, 1},
+        };
+        for (int i = 0; i < 8; i++)
+            for (int j = 0; j < 4; j++)
+                ibz_set(&gens[i][j], vals[i][j]);
+        res |= compare_mlll_vs_gram(gens, 8, &alg, "fp_dense_8gen_p19");
+        for (int i = 0; i < 8; i++) ibz_vec_4_finalize(&gens[i]);
+        quat_alg_finalize(&alg);
+    }
+
+    {
+        quat_alg_t alg;
+        quat_alg_init_set_ui(&alg, 11);
+        ibz_vec_4_t gens[16];
+        for (int i = 0; i < 16; i++) ibz_vec_4_init(&gens[i]);
+        for (int i = 0; i < 16; i++) {
+            ibz_set(&gens[i][0], (i * 7 + 3) % 17);
+            ibz_set(&gens[i][1], (i * 11 + 5) % 17);
+            ibz_set(&gens[i][2], (i * 13 + 1) % 17);
+            ibz_set(&gens[i][3], (i * 5 + 9) % 17);
+        }
+        res |= compare_mlll_vs_gram(gens, 16, &alg, "fp_stress_16gen_p11");
+        for (int i = 0; i < 16; i++) ibz_vec_4_finalize(&gens[i]);
+        quat_alg_finalize(&alg);
+    }
+
+    /* L5-width coverage: realistic-sized prime (~255 bits) with 16 random
+     * generators bounded by p. Smallest ibz-wide case that actually walks
+     * the 17-limb gram path. Seed is fixed so the trial is reproducible. */
+    {
+        quat_alg_t alg;
+        ibz_t prime;
+        ibz_init(&prime);
+        ibz_set_from_str(&prime,
+            "4ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            16);
+        quat_alg_init_set(&alg, &prime);
+
+        uint32_t seed[12] = { 0xF0CACC1A };
+        randombytes_init((unsigned char *)seed, NULL, 256);
+
+        ibz_t bound, neg_bound;
+        ibz_init(&bound);
+        ibz_init(&neg_bound);
+        ibz_copy(&bound, &prime);
+        ibz_neg(&neg_bound, &bound);
+
+        ibz_vec_4_t gens[16];
+        for (int i = 0; i < 16; i++) ibz_vec_4_init(&gens[i]);
+        for (int i = 0; i < 16; i++)
+            for (int j = 0; j < 4; j++)
+                ibz_rand_interval(&gens[i][j], &neg_bound, &bound);
+
+        res |= compare_mlll_vs_gram(gens, 16, &alg, "fp_L5_16gen_random");
+
+        for (int i = 0; i < 16; i++) ibz_vec_4_finalize(&gens[i]);
+        ibz_finalize(&bound);
+        ibz_finalize(&neg_bound);
+        ibz_finalize(&prime);
+        quat_alg_finalize(&alg);
+    }
+
+    quat_mlll_gram_set_fp_mode(saved_fp);
+
+    if (res == 0)
+        printf("  PASS: quat_test_mlll_gram_fp_equivalence\n");
+    return res;
+}
+
 /* ========== Corner-case tests: minimal / rank-deficient / zero inputs ========== */
 
 /* Helper: check all entries of column c in basis are zero */
@@ -1430,6 +1542,7 @@ quat_test_mlll_all(void)
     res |= quat_test_mlll_gram_prealloc_equivalence();
     res |= quat_test_fp_arith_vs_ibz();
     res |= quat_test_fp_mul_vs_ibz();
+    res |= quat_test_mlll_gram_fp_equivalence();
     res |= quat_test_mlll_all_zero_generators();
     res |= quat_test_mlll_single_generator();
     res |= quat_test_mlll_two_generators_dependent();

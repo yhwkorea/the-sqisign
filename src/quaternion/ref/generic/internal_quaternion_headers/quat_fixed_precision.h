@@ -191,14 +191,23 @@ void quat_fp_gram_get_ibz(ibz_t *dst, const quat_fp_gram_t *src,
 void quat_fp_tmp_get_ibz(ibz_t *dst, const quat_fp_tmp_t *src,
                          const quat_fp_widths_t *w);
 
-/* ---------- dpe bridge (for L² Cholesky computed from the fixed Gram) ------ */
+/* ---------- dpe bridge (for L² Cholesky computed from the fixed Gram) ------
+ *
+ * The bridge goes through an `ibz_t` scratch (`dpe_set_z` / `dpe_get_z` are
+ * the only exposed conversion primitives in `dpe.h`). Caller owns the
+ * scratch so it can be reused across calls and not heap-churn per size-
+ * reduce step. Any initialized `ibz_t` works — the bridge writes into it.
+ */
 
 /* Set a dpe from a fixed-width Gram entry (signed). */
 void quat_fp_gram_to_dpe(dpe_t dst, const quat_fp_gram_t *src,
-                         const quat_fp_widths_t *w);
-/* Round a dpe to a signed integer X that fits in vec width; used for the
- * size-reduce multiplier. Returns 0 if it overflows the vec width. */
+                         const quat_fp_widths_t *w, ibz_t *scratch);
+/* Convert an already-rounded dpe to a signed integer that fits in vec width.
+ * Caller is expected to have applied `dpe_round` beforehand (mirrors the
+ * existing `dpe_set; dpe_round; dpe_get_z` sequence in mlll_gram.c).
+ * Returns 0 if the rounded value does not fit within the vec width; 1 on
+ * success. */
 int quat_fp_vec_from_dpe_round(quat_fp_vec_t *dst, dpe_t src,
-                               const quat_fp_widths_t *w);
+                               const quat_fp_widths_t *w, ibz_t *scratch);
 
 #endif /* QUAT_FIXED_PRECISION_H */

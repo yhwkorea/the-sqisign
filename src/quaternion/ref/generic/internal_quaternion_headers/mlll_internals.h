@@ -71,6 +71,27 @@ void quat_mlll_gram_set_prealloc_mode(int mode);
 int quat_mlll_gram_get_prealloc_mode(void);
 
 /**
+ * @brief Phase 2 candidate C switch — fixed-precision (`quat_fp_*`) path.
+ *
+ * When enabled, `quat_mlll_gram` calls the fixed-precision body whose
+ * integer storage is stack-allocated `digit_t[NWORDS]` sized per
+ * security level (via `quat_fp_widths_from_alg`). Output is the same
+ * lattice as the `ibz_t` path under the Lemma 3 invariant.
+ *
+ * Fallback: if the level dispatch does not match (e.g., `alg->p` larger
+ * than L5), the dispatcher silently falls through to the `ibz_t` path.
+ *
+ * Mode values:
+ *   0 — off (default; `ibz_t` path, honors prealloc_mode).
+ *   1 — on (fp path when widths resolve; else ibz_t fallback).
+ *
+ * The fp and prealloc modes are independent: fp shortcut is tested first,
+ * prealloc is inspected only on the fallthrough.
+ */
+void quat_mlll_gram_set_fp_mode(int mode);
+int quat_mlll_gram_get_fp_mode(void);
+
+/**
  * @brief Lattice multiplication using MLLL instead of HNF
  *
  * Replaces quat_lattice_mul with MLLL-based approach.
