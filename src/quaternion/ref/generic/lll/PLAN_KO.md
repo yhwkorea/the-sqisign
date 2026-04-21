@@ -65,14 +65,15 @@
 - [x] **P2-C-gram** `quat_mlll_gram_fp` 본체 + dispatcher + fp-native size-reduce/swap/Gram update. `vec4_dot_p`만 ibz scratch bypass (L1 중간값 예산 초과). 상세: §6.3.
 - [x] **P2-overflow** `FP_CHECK_VEC`/`FP_CHECK_GRAM` 매크로로 mutation site 마다 `(nwords-1)*64` 비트 budget 초과 시 `abort()`. `MLLL_FP_NO_OVERFLOW_CHECK` 빌드 플래그로 비활성 가능. Sweep 270 iter에서 trap 발동 0건.
 - [x] **P2-equiv** 2-way pairwise 테스트 3개(ibz↔HNF, ibz↔B, ibz↔fp)로 HNF↔ibz↔B↔fp transitive equivalence. `quat_test_mlll_gram_fp_equivalence` PASS.
-- [x] **P2-decide** Primary = **기존 baseline ibz_t 경로 유지** (2026-04-21). 3-way sweep(`bench_logs/p2_phase2_sweep/SUMMARY.md`)에서 C fp는 L1 Alg 2 기준 5.25× 퇴행, L3/L5는 동률. B는 §5.5에서 이미 탈락. fp scaffold는 회귀 가드 + Lemma 3 runtime 감사 + 미래 재설계 지점으로 보존.
+- [x] **P2-decide** Primary = **C fp 경로** (`quat_mlll_gram_fp`) 최종 채택 (2026-04-21). `g_fp_mode = 1` 기본값. 결정 기준은 논문 contribution 4축(heap-free / Lemma 3 runtime 감사 / compact 연산 고정폭 입증 / CT 호환 여지) — fp가 유일 만족. ibz body는 fp 회귀 oracle로 보존. 시간 퇴행(L1 Alg 2 5.25×)은 수용 trade-off.
 
 **결정 요약** (FIXED_PRECISION_DECISION_KO.md §5.1, §5.6, §5.7):
-- Primary: `quat_mlll_gram_ibz` (기존 body) 유지, 변경 없음.
-- 보조: B prealloc(`--prealloc`), C fp(`--fp`) 모두 런타임 opt-in flag로 보존. 기본값 OFF.
-- **L1 퇴행 원인**: GMP 1-limb special case (`mpn_mul_1`) 대비 schoolbook 5×5/5×9 고정폭이 fast path 상실. 향후 `mpn_mul_1` inline 재설계 시 C scaffold 재활용.
+- Primary: `quat_mlll_gram_fp` (stack 고정폭 + schoolbook + overflow trap). `g_fp_mode = 1`.
+- 회귀 oracle: `quat_mlll_gram_ibz` (기존 ibz body). `set_fp_mode(0)` 또는 `--fp 0`로 명시 opt-out 가능.
+- B prealloc(`--prealloc`): ibz body 한정 서브튜닝 도구로 보존, 기본 OFF.
+- **시간 trade-off**: L1 Alg 2 fp/ibz = 5.25× (trap-off 4.65×), L3/L5 동률. GMP의 1-limb special case 상실이 주요인. 향후 `mpn_mul_1` inline 재설계 시 fp body에 직접 삽입.
 
-**Why**: 논문 contribution의 핵심이 "compact 연산이 고정폭에 실제로 들어간다"는 실증. 구현은 성공했으나 **실측 결과 현 schoolbook 구현으로는 GMP를 이기지 못함**을 확인. Phase 3는 baseline ibz_t 경로 위에 직접 쌓는다.
+**Why**: KLKL25(eprint 2025/1649)의 핵심 주장 "compact 연산이 고정폭에 실제로 들어간다"를 코드로 입증하는 것이 Phase 2의 본래 기준. 시간은 이 기준의 일부가 아님 — primary는 4축 만족 여부로 결정. Phase 3는 fp primary 위에 직접 쌓는다.
 
 **전제**: Phase 1 완료 (typedef 폭이 L3/L5 재측정으로 확정됨). ✅
 
@@ -80,8 +81,7 @@
 
 **목표**: 논문 Alg 1/4를 MLLL 경로로 구현. 기존 HNF 경로와 동치성 테스트.
 
-- [ ] **P3-1** Alg 1 IdealFiltration 설계 검토 (논문 03Ideal.tex + 04Sampling.tex 재정독)
-  - 기존 HNF 기반 filtration 함수 존재 여부 먼저 조사
+- [ ] **P3-1** Alg 1 IdealFiltration 설계 검토 (논문 03Ideal.tex + 04Sampling.tex 재정독). HNF 대조 기준이 필요하면 그때 `grep quat_lideal_filtration` 한 번이면 충분 — 별도 조사 step 아님.
 - [ ] **P3-2** `quat_lideal_filtration_mlll_gram` 구현
 - [ ] **P3-3** Alg 4 RandomEquivalentPrimeIdeal MLLL 버전
   - 기존 `quat_lideal_prime_norm_reduced_equivalent` (`lll_applications.c`) → `quat_lideal_prime_norm_reduced_equivalent_mlll_gram` 분기

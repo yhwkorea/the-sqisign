@@ -817,6 +817,12 @@ quat_test_mlll_gram_prealloc_equivalence(void)
     }
 
     int saved_mode = quat_mlll_gram_get_prealloc_mode();
+    /* Force the ibz path — prealloc is a hint on the ibz mpz_t buffers and
+     * has no effect when the dispatcher routes through the fp body. Since
+     * fp_mode default flipped to 1 (Phase 2 primary) we must pin it off
+     * here so this test actually exercises the prealloc toggle. */
+    int saved_fp = quat_mlll_gram_get_fp_mode();
+    quat_mlll_gram_set_fp_mode(0);
 
     /* ---- Alg 2: lattice_mul_mlll_gram ---- */
     for (int i = 0; i < trials; i++) {
@@ -877,6 +883,7 @@ quat_test_mlll_gram_prealloc_equivalence(void)
     }
 
     quat_mlll_gram_set_prealloc_mode(saved_mode);
+    quat_mlll_gram_set_fp_mode(saved_fp);
 
     if (res == 0)
         printf("  PASS: quat_test_mlll_gram_prealloc_equivalence (%d trials, alg2+alg3)\n", trials);

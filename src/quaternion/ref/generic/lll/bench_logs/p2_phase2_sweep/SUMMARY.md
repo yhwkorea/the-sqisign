@@ -100,37 +100,52 @@ Trap-off table:
    demand and the hint buys nothing. Expected from the `mpz_realloc2`
    semantics in GMP docs.
 
-3. **At L3/L5 fp roughly matches baseline** — but "matches" is not
-   "beats". Neither candidate dominates, and we lose the L1
-   production path. No level has a net win.
+3. **At L3/L5 fp roughly matches baseline** — recorded as a time
+   trade-off, not a decision input.
 
 ## Decision
 
-**Primary backend remains the baseline ibz_t path** (the existing
-`quat_mlll_gram_ibz` body). Neither B (prealloc) nor C (fp) yields a
-competitive speedup at any security level; C actively regresses L1.
+**Primary backend is the fp path** (`quat_mlll_gram_fp`).
+`g_fp_mode` defaults to 1. The ibz body is kept as a regression
+oracle, reachable via `--fp 0` / `set_fp_mode(0)`.
 
-### What the fp scaffold is kept for
+**Why not "baseline wins because fp is 5.25× slower at L1"?** Because
+time was never a Phase 2 criterion. The four criteria that *were*
+stated up front (see FIXED_PRECISION_DECISION_KO.md §5.1) are:
 
-- **Upper-bound regression guard.** The `gram_fp_equivalence` test
-  continues to prove the two paths produce identical lattices.
-  Anything that breaks that test flags a correctness bug in either
-  arithmetic path.
-- **Runtime Lemma-3 audit.** The overflow trap runs whenever the fp
-  path is opted into; a trip means our widths table or the Lemma 3
-  argument is wrong.
-- **Future redesign surface.** If a future improvement targets the
-  size-reduce inner loop (e.g., replace schoolbook with `mpn_mul_1`
-  inlined for the 1-limb L1 case, or fuse `mul + narrow-sub`), the
-  fp machinery is the natural landing spot. The types and bridge are
-  already in place.
+1. Heap-free / stack layout — fp ✓, ibz ✗.
+2. Runtime Lemma-3 audit (overflow trap) — fp ✓, ibz ✗.
+3. Paper contribution in code (KLKL25: "compact arithmetic fits in
+   fixed widths") — fp ✓, ibz ✗.
+4. CT-compatible layout (for eprint 2025/2192 future direction) —
+   fp ✓, ibz ✗.
+
+fp is the only candidate that satisfies all four. The 5.25× L1
+regression is accepted; addressing it is a Phase-2-post redesign
+task (inline `mpn_mul_1` for the 1-limb L1 case, or
+`mul + narrow-sub` fusion) that reuses the fp types in place.
+
+**Note on first-take reversal.** An earlier draft of this SUMMARY
+(same day, AM) concluded the opposite — "baseline remains primary" —
+on the basis of time ratios alone. That draft was overruled once we
+re-read the decision criteria this document was supposed to
+implement. The sweep numbers above are unchanged; only the
+interpretation was corrected.
+
+### What the ibz body is kept for
+
+- **fp regression oracle.** The `gram_fp_equivalence` test compares
+  fp output against ibz output bit-for-bit.
+- **Width-unresolved fallback.** When `alg->p` doesn't map to
+  L1/L3/L5, the dispatcher silently routes to ibz.
 
 ### What to remove/keep
 
-- **Keep**: `quat_fixed_precision.[hc]`, `quat_mlll_gram_fp`,
-  dispatcher, `set_fp_mode`, `gram_fp_equivalence` test,
-  `--fp` bench flag, overflow trap.
-- **Default**: `g_fp_mode = 0`. Production never opts in.
-- **Remove** (future): nothing for now — the scaffolding cost is
-  negligible and the guard-rail value is real. Re-evaluate if the
-  maintenance burden grows.
+- **Keep (production path)**: `quat_fixed_precision.[hc]`,
+  `quat_mlll_gram_fp`, dispatcher, `set_fp_mode`,
+  `gram_fp_equivalence` test, `--fp` bench flag, overflow trap.
+- **Keep (oracle)**: `quat_mlll_gram_ibz`, prealloc scaffold,
+  `quat_test_mlll_gram_prealloc_equivalence`.
+- **Default**: `g_fp_mode = 1`. Production always goes through fp.
+- **Remove** (future): nothing for now — ibz oracle cost is
+  negligible. Re-evaluate if maintenance burden grows.
