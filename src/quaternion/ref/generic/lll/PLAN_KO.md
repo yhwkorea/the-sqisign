@@ -55,22 +55,24 @@
 
 **Why**: 감사 C1 픽스로 Cohen path max가 3028→3543 bits로 이동. L3/L5도 같은 폭 누락 가능성 있어 재측정. GRAM 경로는 거의 영향 없음을 실측 확인 — Phase 2 typedef 폭 그대로 사용 가능.
 
-### Phase 2 — Fixed-precision 전환 (~11-14일, 병행 구현 + 실측 비교)
+### Phase 2 — Fixed-precision 전환 (완료: 2026-04-21)
 
 **목표**: `ibz_t`(GMP 동적) → 고정폭 산술로 내부 전환. B와 C 둘 다 구현하고 실측으로 primary 결정. 상세: [FIXED_PRECISION_DECISION_KO.md](FIXED_PRECISION_DECISION_KO.md)
 
 - [x] **P2-1** 백엔드 결정 문서 초안 — `FIXED_PRECISION_DECISION_KO.md` (2026-04-22). A 탈락, B와 C 병행 구현 방침 확정.
 - [x] **P2-B** B 구현: `ibz_t` + `mpz_realloc2` prealloc scaffold (2026-04-21). 동치성 검증 PASS, 벤치 결과 hint only 확인 — B 단독으로는 목표 미달성, reference oracle로 유지. 상세: `FIXED_PRECISION_DECISION_KO.md` §5.5.
-- [ ] **P2-C-types** Per-level typedef 정의 (`quat_b_vec_L{k}_t`, `quat_b_gram_L{k}_t`) + signed 표현 결정.
-  - L1: vec 5×u64(320b), Gram 9×u64(576b)
-  - L3: vec 7×u64(448b), Gram 13×u64(832b)
-  - L5: vec 9×u64(576b), Gram 17×u64(1088b)
-- [ ] **P2-C-gram** GRAM 내부 산술 C 구현 (mul/division 구현 선택 포함).
-- [ ] **P2-overflow** C 경로 overflow trap (B* 초과 시 abort, 릴리즈 빌드에서도 활성).
-- [ ] **P2-equiv** 3-way 동치성 + 벤치 비교 (HNF / ibz_t GRAM / B / C).
-- [ ] **P2-decide** 실측 결과로 primary 최종 결정 + 결정 문서 업데이트.
+- [x] **P2-C-types** Per-level 폭 매크로 + 런타임 descriptor(`quat_fp_widths_t`) + 단일 최대폭 array. Two's complement storage + sign-magnitude mul 확정. 상세: `FIXED_PRECISION_DECISION_KO.md` §6.2.
+- [x] **P2-C-gram** `quat_mlll_gram_fp` 본체 + dispatcher + fp-native size-reduce/swap/Gram update. `vec4_dot_p`만 ibz scratch bypass (L1 중간값 예산 초과). 상세: §6.3.
+- [x] **P2-overflow** `FP_CHECK_VEC`/`FP_CHECK_GRAM` 매크로로 mutation site 마다 `(nwords-1)*64` 비트 budget 초과 시 `abort()`. `MLLL_FP_NO_OVERFLOW_CHECK` 빌드 플래그로 비활성 가능. Sweep 270 iter에서 trap 발동 0건.
+- [x] **P2-equiv** 2-way pairwise 테스트 3개(ibz↔HNF, ibz↔B, ibz↔fp)로 HNF↔ibz↔B↔fp transitive equivalence. `quat_test_mlll_gram_fp_equivalence` PASS.
+- [x] **P2-decide** Primary = **기존 baseline ibz_t 경로 유지** (2026-04-21). 3-way sweep(`bench_logs/p2_phase2_sweep/SUMMARY.md`)에서 C fp는 L1 Alg 2 기준 5.25× 퇴행, L3/L5는 동률. B는 §5.5에서 이미 탈락. fp scaffold는 회귀 가드 + Lemma 3 runtime 감사 + 미래 재설계 지점으로 보존.
 
-**Why**: 논문 contribution의 핵심이 "compact 연산이 고정폭에 실제로 들어간다"는 실증. 현 구현은 여전히 `ibz_t`라 bitsize만 작을 뿐 메모리 레이아웃은 동일. B는 힙 할당 빈도 감소(hint), C는 진짜 stack 고정폭 — 실측 비교로 primary 결정.
+**결정 요약** (FIXED_PRECISION_DECISION_KO.md §5.1, §5.6, §5.7):
+- Primary: `quat_mlll_gram_ibz` (기존 body) 유지, 변경 없음.
+- 보조: B prealloc(`--prealloc`), C fp(`--fp`) 모두 런타임 opt-in flag로 보존. 기본값 OFF.
+- **L1 퇴행 원인**: GMP 1-limb special case (`mpn_mul_1`) 대비 schoolbook 5×5/5×9 고정폭이 fast path 상실. 향후 `mpn_mul_1` inline 재설계 시 C scaffold 재활용.
+
+**Why**: 논문 contribution의 핵심이 "compact 연산이 고정폭에 실제로 들어간다"는 실증. 구현은 성공했으나 **실측 결과 현 schoolbook 구현으로는 GMP를 이기지 못함**을 확인. Phase 3는 baseline ibz_t 경로 위에 직접 쌓는다.
 
 **전제**: Phase 1 완료 (typedef 폭이 L3/L5 재측정으로 확정됨). ✅
 
@@ -112,11 +114,11 @@
 
 아직 미결정 항목. 진행 전에 별도 문서/메모리로 기록해야 함.
 
-1. **Phase 2 백엔드** (A/B/C 중 어느 것)
+1. ~~**Phase 2 백엔드** (A/B/C 중 어느 것)~~ — **2026-04-21 해결: baseline ibz_t 유지** (DECISION §5.1).
 2. **Alg 1 기존 HNF 구현 유무** (확인 필요, P3-1)
-3. **Constant-time 요구 수준** — Phase 2에서 C 백엔드로 갈지 여부의 전제
+3. **Constant-time 요구 수준** — Phase 2 결과 무관하게 fp scaffold가 CT 여지를 확보해 둠(`g_fp_mode` opt-in). 실수요 생길 때 재검토.
 4. **PR 1회 큰 덩어리 vs 5개 분할** — upstream 리뷰어 피드백 받아본 후 결정
-5. **Gram 외 Cohen 경로 유지 여부** — 비교/교차검증용으로 남길지, 제거할지
+5. **Gram 외 Cohen 경로 유지 여부** — 비교/교차검증용으로 남길지, 제거할지. Phase 3 착수 전 결정 필요.
 
 ## 논문 매핑 업데이트 (참고)
 
@@ -131,9 +133,9 @@
 | Phase | 기간 | 누적 | 상태 |
 |---|---|---|---|
 | P1 측정 | ~2d | 2026-04-21 | ✅ 완료 |
-| P2 fixed-precision | ~11-14d | ~2026-05-06 | P2-1 완료, **P2-B 완료 (hint only 확증)**, P2-C 착수 예정 |
-| P3 Alg 1/4 | ~2w | ~2026-05-20 | |
-| P4 SQIsign 통합 | ~3w | ~2026-06-10 | |
-| P5 PR 분리 | ~1w | ~2026-06-17 | |
+| P2 fixed-precision | ~11-14d → 1d | 2026-04-21 | ✅ **완료 — baseline 유지 확정** (primary 승격 후보 없음) |
+| P3 Alg 1/4 | ~2w | ~2026-05-05 | 착수 가능 |
+| P4 SQIsign 통합 | ~3w | ~2026-05-26 | |
+| P5 PR 분리 | ~1w | ~2026-06-02 | |
 
-실제 일정은 Phase 2 백엔드 결정과 Alg 1 기존 구현 조사 결과에 따라 크게 달라짐.
+Phase 2가 예상 11-14일 대신 1일에 종결된 이유: B(prealloc)가 §5.5에서 즉시 탈락했고 C(fp) 전체 구현 후 sweep에서도 승격 조건 미달이라 추가 튜닝 사이클 없이 decision 확정. 실제 일정은 Alg 1 기존 구현 조사 결과에 따라 달라짐.
