@@ -28,6 +28,23 @@
 /* Symmetric Gram access: store lower triangular (i >= j). */
 #define G_SYM(G, i, j) ((i) >= (j) ? &(G)[(i)][(j)] : &(G)[(j)][(i)])
 
+/* ---------- fp overflow trap toggle ----------
+ *
+ * The fp path inserts bitsize checks after every mutation that could in
+ * principle push the result past the Lemma 3 / Lemma 1 bound. Always on
+ * by default (the check is O(nwords) bitsize + compare, dwarfed by the
+ * schoolbook mul it guards). Define `MLLL_FP_NO_OVERFLOW_CHECK` at build
+ * time to elide the checks entirely — reserved for competitive benches
+ * where we compare raw throughput against the ibz path and do not want
+ * to contaminate the measurement with safety-only work. */
+#ifdef MLLL_FP_NO_OVERFLOW_CHECK
+#define FP_CHECK_VEC(v, w, site)  ((void)0)
+#define FP_CHECK_GRAM(g, w, site) ((void)0)
+#else
+#define FP_CHECK_VEC(v, w, site)  quat_fp_vec_check_overflow((v), (w), (site))
+#define FP_CHECK_GRAM(g, w, site) quat_fp_gram_check_overflow((g), (w), (site))
+#endif
+
 /* ---------- Phase 2 candidate B: mpz_realloc2 prealloc scaffold ---------- */
 
 /* Process-global mode flag. 0 = baseline, 1 = prealloc hints on.
@@ -440,6 +457,7 @@ vec4_dot_p_fp(quat_fp_gram_t *dot,
             ibz_bitsize(dot_ibz));
         abort();
     }
+    FP_CHECK_GRAM(dot, widths, "vec4_dot_p_fp");
     tracker_update_gso_ibz(dot_ibz);
 }
 
@@ -565,6 +583,7 @@ quat_mlll_gram_fp(ibz_mat_4x4_t *basis,
                 alpha, j);
             abort();
         }
+        FP_CHECK_VEC(&b[0][j], widths, "load_gen0");
     }
     alpha++;
     gram_fill_row_fp(G, b, 0, widths, &alg->p,
@@ -592,6 +611,7 @@ quat_mlll_gram_fp(ibz_mat_4x4_t *basis,
                         "vec width\n", alpha, j);
                     abort();
                 }
+                FP_CHECK_VEC(&b[beta][j], widths, "load_gen");
             }
             alpha++;
             gram_fill_row_fp(G, b, beta, widths, &alg->p,
@@ -637,11 +657,14 @@ quat_mlll_gram_fp(ibz_mat_4x4_t *basis,
                         abort();
                     }
 
+                    FP_CHECK_VEC(&X, widths, "size_reduce_X");
+
                     /* b[kappa] -= X * b[i] */
                     for (int j = 0; j < 4; j++) {
                         quat_fp_tmp_mul_vec_vec(&tmp_product, &X,
                                                 &b[i][j], widths);
                         quat_fp_vec_sub_tmp(&b[kappa][j], &tmp_product, widths);
+                        FP_CHECK_VEC(&b[kappa][j], widths, "b_sub_Xb");
                     }
                     tracker_update_fp_vec4(b[kappa], widths);
 
@@ -652,11 +675,13 @@ quat_mlll_gram_fp(ibz_mat_4x4_t *basis,
                     quat_fp_tmp_mul_vec_gram(&tmp_product, &X,
                                              G_SYM(G, kappa, i), widths);
                     quat_fp_gram_sub_tmp(&G[kappa][kappa], &tmp_product, widths);
+                    FP_CHECK_GRAM(&G[kappa][kappa], widths, "G_diag_sub");
                     for (int j = 0; j < beta; j++) {
                         quat_fp_gram_t *gkj = G_SYM(G, kappa, j);
                         quat_fp_tmp_mul_vec_gram(&tmp_product, &X,
                                                  G_SYM(G, i, j), widths);
                         quat_fp_gram_sub_tmp(gkj, &tmp_product, widths);
+                        FP_CHECK_GRAM(gkj, widths, "G_row_sub");
                         tracker_update_fp_gso(gkj, widths);
                     }
 

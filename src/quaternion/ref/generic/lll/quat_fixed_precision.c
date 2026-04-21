@@ -448,19 +448,49 @@ quat_fp_gram_sub_tmp(quat_fp_gram_t *r, const quat_fp_tmp_t *t,
     fp_limbs_sub(r->limbs, r->limbs, t->limbs, w->nwords_gram);
 }
 
+/* ---------- Overflow trap ----------
+ *
+ * Policy: magnitude bitsize must fit in `(nwords - 1) * 64` bits. That
+ * reserves the topmost 64 bits as the sign-extension margin which
+ * size-reduce relies on (a product `X * G[i][j]` can temporarily occupy
+ * `vec + gram` bits in `tmp_product` before being subtracted back; the
+ * result must land within budget or the narrow-subtract silently loses
+ * bits). Phase 1 measured max-observed bitsize well under this bound
+ * across L1/L3/L5 — a trap firing here signals either (a) a widths-table
+ * miss or (b) a bug in the Lemma 3 argument, both of which are program
+ * errors that should not silently corrupt the basis.
+ *
+ * `site` labels the call location for the diagnostic; keep short.
+ */
 void
 quat_fp_vec_check_overflow(const quat_fp_vec_t *v,
                            const quat_fp_widths_t *w,
                            const char *site)
 {
-    (void)v; (void)w; (void)site; fp_stub(__func__);
+    int bits = fp_limbs_bitsize(v->limbs, w->nwords_vec);
+    int budget = (int)(w->nwords_vec - 1) * 64;
+    if (bits > budget) {
+        fprintf(stderr,
+                "quat_fp_vec overflow at %s: %d bits > %d budget "
+                "(nwords_vec=%u)\n",
+                site, bits, budget, w->nwords_vec);
+        abort();
+    }
 }
 void
 quat_fp_gram_check_overflow(const quat_fp_gram_t *g,
                             const quat_fp_widths_t *w,
                             const char *site)
 {
-    (void)g; (void)w; (void)site; fp_stub(__func__);
+    int bits = fp_limbs_bitsize(g->limbs, w->nwords_gram);
+    int budget = (int)(w->nwords_gram - 1) * 64;
+    if (bits > budget) {
+        fprintf(stderr,
+                "quat_fp_gram overflow at %s: %d bits > %d budget "
+                "(nwords_gram=%u)\n",
+                site, bits, budget, w->nwords_gram);
+        abort();
+    }
 }
 
 /* ---------- dpe bridge ----------
