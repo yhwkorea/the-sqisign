@@ -1267,6 +1267,150 @@ quat_test_fp_arith_vs_ibz(void)
     return res;
 }
 
+/* ---------- Multiplication + narrow-sub tests ----------
+ * Exercises quat_fp_tmp_mul_vec_{vec,gram} and quat_fp_{vec,gram}_sub_tmp
+ * against ibz_mul / ibz_sub references. These are the hot ops that the
+ * mlll_gram.c cut-over (P2-C-gram step 3) will actually call. */
+
+static int
+fp_mul_at_width(const char *label, const quat_fp_widths_t *w, int ntrials)
+{
+    int res = 0;
+    ibz_t a, b, ref, got, vb, gb, tb, prod, sub_ref;
+    ibz_init(&a); ibz_init(&b);
+    ibz_init(&ref); ibz_init(&got);
+    ibz_init(&vb); ibz_init(&gb); ibz_init(&tb);
+    ibz_init(&prod); ibz_init(&sub_ref);
+
+    quat_fp_vec_t vv;
+    quat_fp_gram_t gg, gg_accum;
+    quat_fp_vec_t vv_accum;
+    quat_fp_tmp_t tt;
+
+    unsigned char seed[48];
+    for (int i = 0; i < 48; i++)
+        seed[i] = (unsigned char)((i * 11) ^ (unsigned)label[1]);
+    randombytes_init(seed, NULL, 256);
+
+    /* vec * vec -> tmp */
+    int vec_bits_max = (int)(w->nwords_vec * 64) - 2;
+    for (int t = 0; t < ntrials; t++) {
+        int ab = 1 + ((t * 13) % vec_bits_max);
+        int bb = 1 + ((t * 19 + 5) % vec_bits_max);
+
+        ibz_pow(&vb, &ibz_const_two, (uint32_t)ab);
+        ibz_sub(&vb, &vb, &ibz_const_one);
+        ibz_neg(&got, &vb);
+        ibz_rand_interval(&a, &got, &vb);
+
+        ibz_pow(&vb, &ibz_const_two, (uint32_t)bb);
+        ibz_sub(&vb, &vb, &ibz_const_one);
+        ibz_neg(&got, &vb);
+        ibz_rand_interval(&b, &got, &vb);
+
+        quat_fp_vec_t va2;
+        quat_fp_vec_set_ibz(&vv, &a, w);
+        quat_fp_vec_set_ibz(&va2, &b, w);
+        quat_fp_tmp_mul_vec_vec(&tt, &vv, &va2, w);
+        quat_fp_tmp_get_ibz(&got, &tt, w);
+        ibz_mul(&ref, &a, &b);
+        if (ibz_cmp(&ref, &got) != 0) {
+            printf("  FAIL: %s vec*vec (a %d bits, b %d bits)\n",
+                   label, ab, bb);
+            res = 1; goto done;
+        }
+
+        /* vec_sub_tmp: start from a, subtract (a*b), check result. */
+        quat_fp_vec_set_ibz(&vv_accum, &a, w);
+        quat_fp_vec_sub_tmp(&vv_accum, &tt, w);
+        quat_fp_vec_get_ibz(&got, &vv_accum, w);
+        ibz_sub(&sub_ref, &a, &ref);
+        /* Only meaningful when result fits in vec width; bound the test. */
+        if (ibz_bitsize(&sub_ref) < (int)(w->nwords_vec * 64) - 1) {
+            if (ibz_cmp(&sub_ref, &got) != 0) {
+                printf("  FAIL: %s vec_sub_tmp (a %d bits, b %d bits)\n",
+                       label, ab, bb);
+                res = 1; goto done;
+            }
+        }
+    }
+
+    /* vec * gram -> tmp */
+    int gram_bits_max = (int)(w->nwords_gram * 64) - 2;
+    for (int t = 0; t < ntrials; t++) {
+        int ab = 1 + ((t * 29) % vec_bits_max);
+        int bb = 1 + ((t * 37 + 3) % gram_bits_max);
+
+        ibz_pow(&vb, &ibz_const_two, (uint32_t)ab);
+        ibz_sub(&vb, &vb, &ibz_const_one);
+        ibz_neg(&got, &vb);
+        ibz_rand_interval(&a, &got, &vb);
+
+        ibz_pow(&gb, &ibz_const_two, (uint32_t)bb);
+        ibz_sub(&gb, &gb, &ibz_const_one);
+        ibz_neg(&got, &gb);
+        ibz_rand_interval(&b, &got, &gb);
+
+        quat_fp_vec_set_ibz(&vv, &a, w);
+        quat_fp_gram_set_ibz(&gg, &b, w);
+        quat_fp_tmp_mul_vec_gram(&tt, &vv, &gg, w);
+        quat_fp_tmp_get_ibz(&got, &tt, w);
+        ibz_mul(&ref, &a, &b);
+        if (ibz_cmp(&ref, &got) != 0) {
+            printf("  FAIL: %s vec*gram (a %d bits, b %d bits)\n",
+                   label, ab, bb);
+            res = 1; goto done;
+        }
+
+        /* gram_sub_tmp: start from b, subtract (a*b), check. */
+        quat_fp_gram_set_ibz(&gg_accum, &b, w);
+        quat_fp_gram_sub_tmp(&gg_accum, &tt, w);
+        quat_fp_gram_get_ibz(&got, &gg_accum, w);
+        ibz_sub(&sub_ref, &b, &ref);
+        if (ibz_bitsize(&sub_ref) < (int)(w->nwords_gram * 64) - 1) {
+            if (ibz_cmp(&sub_ref, &got) != 0) {
+                printf("  FAIL: %s gram_sub_tmp (a %d bits, b %d bits)\n",
+                       label, ab, bb);
+                res = 1; goto done;
+            }
+        }
+    }
+
+done:
+    (void)tb; (void)prod;
+    ibz_finalize(&a); ibz_finalize(&b);
+    ibz_finalize(&ref); ibz_finalize(&got);
+    ibz_finalize(&vb); ibz_finalize(&gb); ibz_finalize(&tb);
+    ibz_finalize(&prod); ibz_finalize(&sub_ref);
+    return res;
+}
+
+int
+quat_test_fp_mul_vs_ibz(void)
+{
+    int res = 0;
+    quat_fp_widths_t w;
+
+    w.nwords_vec  = NWORDS_QUAT_VEC_L1;
+    w.nwords_gram = NWORDS_QUAT_GRAM_L1;
+    w.nwords_tmp  = NWORDS_QUAT_TMP_L1;
+    res |= fp_mul_at_width("L1", &w, 40);
+
+    w.nwords_vec  = NWORDS_QUAT_VEC_L3;
+    w.nwords_gram = NWORDS_QUAT_GRAM_L3;
+    w.nwords_tmp  = NWORDS_QUAT_TMP_L3;
+    res |= fp_mul_at_width("L3", &w, 40);
+
+    w.nwords_vec  = NWORDS_QUAT_VEC_L5;
+    w.nwords_gram = NWORDS_QUAT_GRAM_L5;
+    w.nwords_tmp  = NWORDS_QUAT_TMP_L5;
+    res |= fp_mul_at_width("L5", &w, 40);
+
+    if (res == 0)
+        printf("  PASS: quat_test_fp_mul_vs_ibz (L1/L3/L5, 40 trials × vec*vec + vec*gram + sub_tmp)\n");
+    return res;
+}
+
 /* ========== Test runner ========== */
 
 int
@@ -1285,6 +1429,7 @@ quat_test_mlll_all(void)
     res |= quat_test_lideal_create_gram_equivalence();
     res |= quat_test_mlll_gram_prealloc_equivalence();
     res |= quat_test_fp_arith_vs_ibz();
+    res |= quat_test_fp_mul_vs_ibz();
     res |= quat_test_mlll_all_zero_generators();
     res |= quat_test_mlll_single_generator();
     res |= quat_test_mlll_two_generators_dependent();
