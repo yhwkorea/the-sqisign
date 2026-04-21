@@ -51,6 +51,26 @@ void quat_mlll_gram(ibz_mat_4x4_t *basis,
                     const quat_alg_t *alg);
 
 /**
+ * @brief Phase 2 candidate B scaffold — fixed-width GMP prealloc hint.
+ *
+ * When enabled, `quat_mlll_gram` calls `mpz_realloc2` on its internal
+ * `b[]`/`G[][]`/`X`/`tmp` buffers after init to prealloc the Lemma 3
+ * width per security level (derived from `alg->p` bitsize). Goal: reduce
+ * repeated heap reallocations that GMP triggers during size-reduce.
+ *
+ * This is a hint-only optimization (see FIXED_PRECISION_DECISION_KO §3.2).
+ * Output is bitwise identical to the unhinted path.
+ *
+ * Mode values:
+ *   0 — off (baseline, default).
+ *   1 — on (prealloc hints applied at entry).
+ *
+ * Thread-safety: process-global. Benchmarks/tests must not race.
+ */
+void quat_mlll_gram_set_prealloc_mode(int mode);
+int quat_mlll_gram_get_prealloc_mode(void);
+
+/**
  * @brief Lattice multiplication using MLLL instead of HNF
  *
  * Replaces quat_lattice_mul with MLLL-based approach.

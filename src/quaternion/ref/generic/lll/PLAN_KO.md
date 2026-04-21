@@ -60,7 +60,7 @@
 **목표**: `ibz_t`(GMP 동적) → 고정폭 산술로 내부 전환. B와 C 둘 다 구현하고 실측으로 primary 결정. 상세: [FIXED_PRECISION_DECISION_KO.md](FIXED_PRECISION_DECISION_KO.md)
 
 - [x] **P2-1** 백엔드 결정 문서 초안 — `FIXED_PRECISION_DECISION_KO.md` (2026-04-22). A 탈락, B와 C 병행 구현 방침 확정.
-- [ ] **P2-B** B 구현: `ibz_t` + `mpz_realloc2` prealloc scaffold. 10k trials 벤치 + 동치성 검증.
+- [x] **P2-B** B 구현: `ibz_t` + `mpz_realloc2` prealloc scaffold (2026-04-21). 동치성 검증 PASS, 벤치 결과 hint only 확인 — B 단독으로는 목표 미달성, reference oracle로 유지. 상세: `FIXED_PRECISION_DECISION_KO.md` §5.5.
 - [ ] **P2-C-types** Per-level typedef 정의 (`quat_b_vec_L{k}_t`, `quat_b_gram_L{k}_t`) + signed 표현 결정.
   - L1: vec 5×u64(320b), Gram 9×u64(576b)
   - L3: vec 7×u64(448b), Gram 13×u64(832b)
@@ -131,7 +131,7 @@
 | Phase | 기간 | 누적 | 상태 |
 |---|---|---|---|
 | P1 측정 | ~2d | 2026-04-21 | ✅ 완료 |
-| P2 fixed-precision | ~11-14d | ~2026-05-06 | P2-1 완료 (결정 문서 초안), P2-B 착수 예정 |
+| P2 fixed-precision | ~11-14d | ~2026-05-06 | P2-1 완료, **P2-B 완료 (hint only 확증)**, P2-C 착수 예정 |
 | P3 Alg 1/4 | ~2w | ~2026-05-20 | |
 | P4 SQIsign 통합 | ~3w | ~2026-06-10 | |
 | P5 PR 분리 | ~1w | ~2026-06-17 | |

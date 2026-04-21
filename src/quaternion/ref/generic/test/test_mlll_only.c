@@ -53,6 +53,12 @@ int main(void)
     printf("lideal_create_gram_equivalence done (res=%d)\n", res);
     fflush(stdout);
 
+    printf("Starting MLLL test: gram_prealloc_equivalence...\n");
+    fflush(stdout);
+    res |= quat_test_mlll_gram_prealloc_equivalence();
+    printf("gram_prealloc_equivalence done (res=%d)\n", res);
+    fflush(stdout);
+
     printf("Starting MLLL test: all_zero_generators...\n");
     fflush(stdout);
     res |= quat_test_mlll_all_zero_generators();

@@ -27,6 +27,76 @@
 /* Symmetric Gram access: store lower triangular (i >= j). */
 #define G_SYM(G, i, j) ((i) >= (j) ? &(G)[(i)][(j)] : &(G)[(j)][(i)])
 
+/* ---------- Phase 2 candidate B: mpz_realloc2 prealloc scaffold ---------- */
+
+/* Process-global mode flag. 0 = baseline, 1 = prealloc hints on.
+ * Set via quat_mlll_gram_set_prealloc_mode() by benchmarks/tests. */
+static int g_prealloc_mode = 0;
+
+void
+quat_mlll_gram_set_prealloc_mode(int mode)
+{
+    g_prealloc_mode = (mode != 0) ? 1 : 0;
+}
+
+int
+quat_mlll_gram_get_prealloc_mode(void)
+{
+    return g_prealloc_mode;
+}
+
+/* Level hints: map p bitsize to (vec, Gram) widths measured in Phase 1
+ * (10k trials, C1-fixed). Widths rounded up to u64 limb boundary with
+ * +64 bit margin beyond the max-observed value — tracked in
+ * project_sqisign_mlll.md B*_{1,3,5} table.
+ *
+ * Returns 1 if level matched, 0 otherwise (no prealloc done in that case).
+ */
+static int
+mlll_gram_level_hints(const quat_alg_t *alg, int *vec_bits, int *gram_bits)
+{
+    int p_bits = ibz_bitsize(&alg->p);
+    if (p_bits <= 128) {             /* L1: p ~127 bits, vec 259, Gram 518 */
+        *vec_bits  = 320;            /* 5 u64 */
+        *gram_bits = 576;            /* 9 u64 */
+        return 1;
+    } else if (p_bits <= 200) {      /* L3: p ~193 bits, vec 391, Gram 782 */
+        *vec_bits  = 448;            /* 7 u64 */
+        *gram_bits = 832;            /* 13 u64 */
+        return 1;
+    } else if (p_bits <= 256) {      /* L5: p ~254 bits, vec 513, Gram 1026 */
+        *vec_bits  = 576;            /* 9 u64 */
+        *gram_bits = 1088;           /* 17 u64 */
+        return 1;
+    }
+    *vec_bits = 0;
+    *gram_bits = 0;
+    return 0;
+}
+
+/* Prealloc hint on all buffers used by quat_mlll_gram. Called right after
+ * the ibz_init/dpe_init loop when g_prealloc_mode == 1. The b[] and G[][]
+ * matrices hold Lemma 1 / Lemma 3 bounded values; tmp holds transient
+ * products X*b[i][j] or X*G[i][j] of up to (vec+gram) bits. */
+static void
+mlll_gram_prealloc_buffers(ibz_vec_4_t b[N], ibz_t G[N][N],
+                           ibz_t *X, ibz_t *tmp,
+                           int vec_bits, int gram_bits)
+{
+    mp_bitcnt_t vw = (mp_bitcnt_t)vec_bits;
+    mp_bitcnt_t gw = (mp_bitcnt_t)gram_bits;
+    mp_bitcnt_t tw = (mp_bitcnt_t)(vec_bits + gram_bits + 64);
+
+    for (int i = 0; i < N; i++)
+        for (int j = 0; j < 4; j++)
+            mpz_realloc2(b[i][j], vw);
+    for (int i = 0; i < N; i++)
+        for (int j = 0; j < N; j++)
+            mpz_realloc2(G[i][j], gw);
+    mpz_realloc2(*X, vw);
+    mpz_realloc2(*tmp, tw);
+}
+
 /* ---------- helpers ---------- */
 
 /* Quaternion norm bilinear form: <a,b> = a0*b0 + a1*b1 + p*a2*b2 + p*a3*b3 */
@@ -106,6 +176,14 @@ quat_mlll_gram(ibz_mat_4x4_t *basis,
     dpe_init(delta_bar); dpe_set_d(delta_bar, DELTABAR);
     dpe_init(Xf);
     dpe_init(tmpF);
+
+    /* Phase 2 candidate B scaffold: prealloc hint for ibz_t buffers. */
+    if (g_prealloc_mode) {
+        int vec_hint_bits = 0, gram_hint_bits = 0;
+        if (mlll_gram_level_hints(alg, &vec_hint_bits, &gram_hint_bits))
+            mlll_gram_prealloc_buffers(b, G, &X, &tmp,
+                                       vec_hint_bits, gram_hint_bits);
+    }
 
     int alpha = 0, beta = 0, kappa = 0;
 
