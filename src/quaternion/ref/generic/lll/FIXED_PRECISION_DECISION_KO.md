@@ -165,24 +165,37 @@ B 후보 scaffold(`quat_mlll_gram` 진입부에서 `b[]`/`G[][]`/`X`/`tmp` 전�
 
 **측정 결론**: §5.5 참조. `mpz_realloc2` hint는 실측상 효과 없음 또는 퇴행(L1 alg3 1.47× 느려짐). B는 C 구현의 reference oracle로 남기되, primary candidate로서의 경쟁력 소멸.
 
-### 6.2. P2-C-types: Per-level typedef 정의
+### 6.2. P2-C-types: Per-level typedef 정의 — 2026-04-21 완료
 
-- [ ] **P2-C-types-a** `src/quaternion/ref/generic/lll/include/quat_fixed_precision.h` 신설.
-- [ ] **P2-C-types-b** per-level 매크로:
+- [x] **P2-C-types-a** `src/quaternion/ref/generic/internal_quaternion_headers/quat_fixed_precision.h` 신설. 기존 헤더 관행과 통일하기 위해 §6.2 초안의 `lll/include/` 대신 `internal_quaternion_headers/`에 배치.
+- [x] **P2-C-types-b** per-level 폭 매크로 + 구조체 typedef. 실제 채택안은 **단일 최대폭(L5) array + runtime nwords descriptor**:
   ```c
-  // Level 1: vec 5×u64 (320 bits ≥ 259), Gram 9×u64 (576 bits ≥ 518)
-  #define NWORDS_QUAT_VEC_L1  5
-  #define NWORDS_QUAT_GRAM_L1 9
-  #define NWORDS_QUAT_VEC_L3  7
-  #define NWORDS_QUAT_GRAM_L3 13
-  #define NWORDS_QUAT_VEC_L5  9
-  #define NWORDS_QUAT_GRAM_L5 17
+  #define NWORDS_QUAT_VEC_L1    5    /* L3 7 / L5 9 */
+  #define NWORDS_QUAT_VEC_MAX   NWORDS_QUAT_VEC_L5
+  #define NWORDS_QUAT_GRAM_L1   9    /* L3 13 / L5 17 */
+  #define NWORDS_QUAT_GRAM_MAX  NWORDS_QUAT_GRAM_L5
+  /* tmp = vec + gram + 1 (for X * G[i][j]) */
+  #define NWORDS_QUAT_TMP_MAX   NWORDS_QUAT_TMP_L5
 
-  typedef digit_t quat_b_vec_L1_t[NWORDS_QUAT_VEC_L1];
-  typedef digit_t quat_b_gram_L1_t[NWORDS_QUAT_GRAM_L1];
-  // ... L3, L5 동일 패턴
+  typedef struct { digit_t limbs[NWORDS_QUAT_VEC_MAX]; }  quat_fp_vec_t;
+  typedef struct { digit_t limbs[NWORDS_QUAT_GRAM_MAX]; } quat_fp_gram_t;
+  typedef struct { digit_t limbs[NWORDS_QUAT_TMP_MAX]; }  quat_fp_tmp_t;
+
+  typedef struct {
+      unsigned nwords_vec, nwords_gram, nwords_tmp;
+  } quat_fp_widths_t;
   ```
-- [ ] **P2-C-types-c** Signed 표현 결정: MSB = 부호 bit 2's complement, 또는 별도 `sign` field. Phase 1 실측에서 vec 좌표가 음수도 나오므로 signed 필수. **결정은 P2-C-types 작업 시점에 실측으로 판단** (초기 후보: two's complement).
+- [x] **P2-C-types-c** **결정: two's complement storage, sign-magnitude mul 경로.**
+  - Storage(add/sub hot path): 2's comp. add/sub가 unsigned limb arith + carry 그대로 → 분기 無.
+  - Mul은 내부적으로 부호 분리(음수면 negate) → unsigned 곱 → 부호 재부여. GMP `mpn_mul` 또는 schoolbook 어느 쪽이든 공통 최적 패턴.
+  - 근거: Phase 1 실측에서 vec 좌표·Gram 비대각 entry 모두 음수 관측됨. Sign-magnitude storage는 add/sub에서 부호 분기 비용이 hot loop에 매 반복 누적 — 반면 2's comp는 carry propagation 한 번.
+
+**추가 결정** (§7-3 "레벨별 코드 복제 vs generic" 해결):
+  - 기존 `src/gf/ref/lvl{k}/` 패턴은 compile-time 분기를 쓰지만, quaternion 레이어는 현재 `src/quaternion/ref/generic/`에 단일 빌드. 레이어 일관성을 위해 **컴파일-타임 분기 포기, 런타임 분기 채택**.
+  - Trade-off: L1에서 L5 크기(≈200B)의 사용되지 않는 스택 차지. 하지만 단일 바이너리가 3 레벨 모두 처리 가능 — 기존 `mlll_gram_level_hints` 패턴과 일치.
+  - `quat_fp_widths_from_alg(out, alg)`로 `alg->p` bitsize에서 런타임 유도.
+
+**구현 상태**: 헤더 + stub `.c` (`lll/quat_fixed_precision.c`) 추가. zero/copy/swap/is_zero만 구현, 나머지는 `fp_stub()` trap (P2-C-gram에서 구현). 빌드 통과, 기존 테스트 회귀 없음.
 
 ### 6.3. P2-C-gram: GRAM 내부 산술 C 구현
 
@@ -211,10 +224,10 @@ B 후보 scaffold(`quat_mlll_gram` 진입부에서 `b[]`/`G[][]`/`X`/`tmp` 전�
 
 ## 7. 열린 질문 / 검증 필요
 
-1. **Signed 표현**: two's complement vs `{digit_t[N]; int sign}` 분리. Two's complement는 sub 구현 단순, 그러나 sign extension 로직 필요. Phase 2 초반에 결정.
-2. **Division 구현**: Cohen 점화식의 exact div (`num = (d[s+1]·num − lam²) / d[s]`)가 필요. schoolbook division(Knuth D) vs `mpn_divrem_1` 호출. 후자가 간단하지만 mpn_* 의존성 생김.
-3. **레벨별 코드 복제 vs generic**: per-level typedef를 매크로로 하면 한 소스에서 컴파일 타임 분기 가능. 하지만 현재 `src/gf/ref/lvl{k}/` 구조는 소스 복제 방식. 통일성 위해 우리도 복제할지, 아니면 lll 레이어는 generic + 매크로로 갈지. **결정: 일단 generic + 매크로** (복제는 유지보수 부담).
-4. **B 또는 C 중 탈락 경로 제거 시점**: §6.6 최종 결정 후 탈락 경로는 `-DLEGACY_*=1` 플래그로 유지할지 제거할지 판단. 장기적으로는 단일 경로만 유지(P5 PR 분리 전).
+1. **Signed 표현** — **2026-04-21 해결 (§6.2 P2-C-types-c)**. Storage는 two's complement, multiplication만 내부적으로 sign-magnitude. Add/sub hot loop에서 분기 없음이 결정 근거.
+2. **Division 구현**: Cohen 점화식의 exact div (`num = (d[s+1]·num − lam²) / d[s]`)가 필요. 단, 현재 `quat_mlll_gram`은 L² 기반이라 division은 dpe(float) 경로에서만 발생하고 integer exact division은 사용하지 않음. Cohen 경로(`mlll.c`)에만 필요 — Phase 2 scope 밖으로 분류. **재검토: P2-C는 GRAM만 대상이므로 이 열린 질문은 Phase 2에서 드롭.**
+3. **레벨별 코드 복제 vs generic** — **2026-04-21 해결 (§6.2)**. 런타임 분기 + 최대폭(L5) stack array. Compile-time 분기는 현재 quaternion 레이어가 단일 generic 빌드라 부적합.
+4. **B 또는 C 중 탈락 경로 제거 시점**: §6.6 최종 결정 후 탈락 경로는 `-DLEGACY_*=1` 플래그로 유지할지 제거할지 판단. 장기적으로는 단일 경로만 유지(P5 PR 분리 전). **P2-B 결과(§5.5)로 B는 primary 탈락 확정** — 남는 건 C vs 기존 ibz_t 비교. B scaffold는 reference oracle로 Phase 2 동안만 유지.
 5. **Cohen 경로 유지 여부**: 현재 memoroy `project_sqisign_mlll.md`에서도 언급된 열린 질문. Cohen은 Lemma 3 밖이라 고정폭 불가 → Phase 2 종료 시점에 제거 또는 `#ifdef QUAT_MLLL_COHEN_DEBUG` 로 감싸기. **결정 보류**.
 
 ## 8. 일정 (러프, 여유 있게)

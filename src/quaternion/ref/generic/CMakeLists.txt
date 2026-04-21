@@ -15,6 +15,7 @@ set(SOURCE_FILES_QUATERNION_GENERIC_REF
     lll/lll_applications.c
     lll/mlll.c
     lll/mlll_gram.c
+    lll/quat_fixed_precision.c
     lll/rationals.c
     normeq.c
     hnf/ibz_division.c
