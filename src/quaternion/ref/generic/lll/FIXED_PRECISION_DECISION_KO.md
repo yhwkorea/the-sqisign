@@ -123,18 +123,47 @@ Phase 1에서 10k trials × L1/L3/L5 측정으로 GRAM 경로 `vec`/`Gram` 폭�
 - Signed/overflow/부호 관리 수동 처리 부담은 C와 동일 → A는 사실상 C의 subset이고 C가 더 많은 이점을 가진다.
 - 단, **C 내부에서 `mpn_mul` 같은 개별 루틴을 부분 활용하는 것은 허용** (§6.3-c에서 결정). 전면 A 백엔드는 버리지만 도구로서의 mpn_*는 열어둠.
 
+### 5.5. 2026-04-21 P2-B 실측: `mpz_realloc2` hint 사실상 효과 없음 또는 퇴행
+
+B 후보 scaffold(`quat_mlll_gram` 진입부에서 `b[]`/`G[][]`/`X`/`tmp` 전부에 per-level 폭으로 `mpz_realloc2` 호출) 구현 후 baseline vs prealloc 1:1 측정.
+
+**벤치 매트릭스** (`bench_logs_2026-04-21_P2B/`):
+- Alg 3 10k trials × L1/L3/L5 × (baseline, prealloc) = 6 runs. GRAM이 유일 경로라 prealloc 효과 직접 관측 가능.
+- Alg 2 1k trials × L1/L3/L5 × (baseline, prealloc) = 6 runs. MLLL Cohen이 wall time 대부분 차지 → GRAM 경로 지표만 비교.
+
+**결과** (GRAM path ms, 총합):
+
+| Level | Alg3 baseline | Alg3 prealloc | 비율 | Alg2 baseline | Alg2 prealloc | 비율 |
+|---|---|---|---|---|---|---|
+| L1 | 99.80 | 147.04 | **1.47× 느려짐** | 426.37 | 431.75 | 1.01× |
+| L3 | 104.77 | 111.76 | 1.07× | 667.66 | 667.88 | 1.00× |
+| L5 | 109.75 | 110.36 | 1.01× | 879.86 | 882.27 | 1.00× |
+
+출력 bitsize max는 양 경로 **비트 단위 동일** (`quat_test_mlll_gram_prealloc_equivalence` 20 trials × alg2+alg3 PASS). 즉 **정확성은 보존되지만 성능은 개선 없음 또는 퇴행**.
+
+**왜?**
+1. §3.2에서 예측한 그대로 — `mpz_realloc2`는 "repeated reallocation 회피 hint"이고 **ceiling이 아니다**. GMP 내부의 `ibz_mul`/`ibz_add`/`ibz_sub`가 중간 결과 저장 시 여전히 자체 판단으로 realloc을 호출하므로, prealloc으로 선점한 공간이 실제 재사용된다는 보장이 없다.
+2. Alg 3 L1 퇴행 원인은 realloc 호출 비용 자체. `quat_mlll_gram` 1회 호출당 16·4(b) + 16·16(G) + 2(X,tmp) = 322 건의 `mpz_realloc2` 호출이 들어가고, L1 alg 3은 8 generator만 쓰기 때문에 MLLL 본체 작업량이 작다 → 322 prealloc 호출이 전체 시간의 큰 비중 차지. L3/L5 및 alg 2(16 generator)는 본체가 더 무거워서 322 호출이 묻힘.
+
+**결론**:
+- **B만으로는 Phase 2 목표(힙 할당 제거, 고정폭 성능 이득) 달성 불가**. 실측으로 "hint only"가 확인되었으므로 더 이상 B 튜닝에 시간 쓰지 않는다.
+- B scaffold는 C 구현의 reference oracle로 남긴다 (`quat_mlll_gram_set_prealloc_mode(0/1)`로 토글; 기본 0). C 구현 중 산출물이 B=1 출력과 비트 단위 동일해야 정상.
+- **primary는 C 쪽 가능성 높음**. 다만 C 구현 전에 최종 확정 금지 (P2-decide에서 3-way 비교 후 결정).
+
+**Why**: 본 확인으로 Phase 2 전체 성공이 C 구현의 품질에 의존하는 상황이 됨. C가 실패하면 fixed-precision 전환 자체를 재고해야 하므로 P2-C-gram에서 보수적 구현(schoolbook + overflow trap) 우선, 최적화는 P2-decide 이후로 미룬다.
+
 ## 6. 구현 단계
 
 일정은 §8 참조. 각 단계는 독립 커밋 단위.
 
-### 6.1. P2-B: B 단계 구현 (`mpz_realloc2` prealloc scaffold)
+### 6.1. P2-B: B 단계 구현 (`mpz_realloc2` prealloc scaffold) — 2026-04-21 완료
 
-- [ ] **P2-B-a** `quat_mlll_gram` 진입부에서 `b[]`, `G[]`, `d[]`, `lam[][]` 각 `ibz_t`에 `mpz_realloc2(x, B*_{k} + margin)` 호출. margin = 64 bits (limb 경계 여유).
-- [ ] **P2-B-b** 동일 입력에 대해 전/후 결과 비트 단위 동일 검증 (`quat_test_mlll_gram_equivalence` 확장).
-- [ ] **P2-B-c** 10k trials 벤치 재실행, 시간 변화량 기록. realloc 호출 횟수 비교 (heap profiler 또는 `LD_PRELOAD` 카운터).
-- [ ] **P2-B-d** `--mode=alg2_prealloc`, `--mode=alg3_prealloc` 벤치 서브모드 추가.
+- [x] **P2-B-a** `quat_mlll_gram` 진입부에서 `b[]`/`G[][]`/`X`/`tmp` 각 `ibz_t`에 `mpz_realloc2(x, B*_{k}+64)` 호출. Per-level 폭(L1 vec 320/Gram 576, L3 vec 448/Gram 832, L5 vec 576/Gram 1088)은 `alg->p` bitsize에서 유도. Global flag `quat_mlll_gram_set_prealloc_mode()` 노출.
+- [x] **P2-B-b** In-process 토글 비교로 비트 동일 검증 — `quat_test_mlll_gram_prealloc_equivalence` 20 trials × (alg2 + alg3) PASS.
+- [x] **P2-B-c** 10k trials 벤치 재실행 (`bench_logs_2026-04-21_P2B/`). 시간 변화 기록: §5.5 표. Heap profiler 카운터는 **필요 없음** — 시간이 이미 hint only를 증언.
+- [x] **P2-B-d** `--prealloc` 플래그로 toggle. 기존 `--mode=alg2|alg3` 체계 유지하고 전역 mode만 토글.
 
-**측정 목표**: realloc 호출이 몇 번 남는지, 시간 단축이 실측 몇 %인지. §3.2의 "hint only" 특성이 실측과 얼마나 일치하는지.
+**측정 결론**: §5.5 참조. `mpz_realloc2` hint는 실측상 효과 없음 또는 퇴행(L1 alg3 1.47× 느려짐). B는 C 구현의 reference oracle로 남기되, primary candidate로서의 경쟁력 소멸.
 
 ### 6.2. P2-C-types: Per-level typedef 정의
 

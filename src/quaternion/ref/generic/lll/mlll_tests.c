@@ -754,6 +754,147 @@ cleanup:
     return res;
 }
 
+/* ========== Test: quat_mlll_gram prealloc mode produces identical output ==========
+ *
+ * Phase 2 candidate B: `g_prealloc_mode` is a hint-only optimization
+ * (mpz_realloc2). Output must be bitwise identical between mode 0 and mode 1
+ * across every trial — anything else means we've introduced a correctness bug
+ * along the way.
+ *
+ * Tests both Alg 2 (lattice_mul_mlll_gram) and Alg 3 (lideal_create_mlll_gram)
+ * entry points at L1 since they are the two production code paths.
+ */
+int
+quat_test_mlll_gram_prealloc_equivalence(void)
+{
+    int res = 0;
+    quat_alg_t alg;
+    ibz_t prime;
+    ibz_init(&prime);
+    ibz_set_from_str(&prime,
+        "4ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", 16);
+    quat_alg_init_set(&alg, &prime);
+
+    quat_p_extremal_maximal_order_t order;
+    quat_represent_integer_params_t params;
+    quat_lattice_init(&(order.order));
+    quat_alg_elem_init(&(order.t));
+    quat_alg_elem_init(&(order.z));
+    quat_lattice_O0_set_extremal(&order);
+    params.algebra = &alg;
+    params.order = &order;
+    params.primality_test_iterations = 30;
+
+    uint32_t seed[12] = { 0xDEADBEEF };
+    randombytes_init((unsigned char *)seed, NULL, 256);
+
+    int trials = 20;
+    quat_lattice_t *lats1 = malloc(trials * sizeof(quat_lattice_t));
+    quat_lattice_t *lats2 = malloc(trials * sizeof(quat_lattice_t));
+    ibz_t *norms1 = malloc(trials * sizeof(ibz_t));
+    for (int i = 0; i < trials; i++) {
+        quat_lattice_init(&lats1[i]);
+        quat_lattice_init(&lats2[i]);
+        ibz_init(&norms1[i]);
+    }
+
+    if (quat_test_input_random_ideal_lattice_generation(lats1, norms1, 127, trials, &params) != 0) {
+        printf("  FAIL: random ideal generation (set 1)\n");
+        res = 1;
+        goto cleanup;
+    }
+    {
+        ibz_t *norms2_tmp = malloc(trials * sizeof(ibz_t));
+        for (int i = 0; i < trials; i++) ibz_init(&norms2_tmp[i]);
+        if (quat_test_input_random_ideal_lattice_generation(lats2, norms2_tmp, 127, trials, &params) != 0) {
+            printf("  FAIL: random ideal generation (set 2)\n");
+            res = 1;
+        }
+        for (int i = 0; i < trials; i++) ibz_finalize(&norms2_tmp[i]);
+        free(norms2_tmp);
+        if (res) goto cleanup;
+    }
+
+    int saved_mode = quat_mlll_gram_get_prealloc_mode();
+
+    /* ---- Alg 2: lattice_mul_mlll_gram ---- */
+    for (int i = 0; i < trials; i++) {
+        quat_lattice_t prod_off, prod_on;
+        quat_lattice_init(&prod_off);
+        quat_lattice_init(&prod_on);
+
+        quat_mlll_gram_set_prealloc_mode(0);
+        quat_lattice_mul_mlll_gram(&prod_off, &lats1[i], &lats2[i], &alg);
+
+        quat_mlll_gram_set_prealloc_mode(1);
+        quat_lattice_mul_mlll_gram(&prod_on, &lats1[i], &lats2[i], &alg);
+
+        if (!quat_lattice_equal(&prod_off, &prod_on)) {
+            printf("  FAIL: alg2 trial %d: lattice differs between prealloc 0 and 1\n", i);
+            res = 1;
+        }
+
+        quat_lattice_finalize(&prod_off);
+        quat_lattice_finalize(&prod_on);
+    }
+
+    /* ---- Alg 3: lideal_create_mlll_gram ---- */
+    for (int i = 0; i < trials; i++) {
+        quat_alg_elem_t x;
+        quat_alg_elem_init(&x);
+        for (int j = 0; j < 4; j++)
+            ibz_copy(&x.coord[j], &lats1[i].basis[j][0]);
+        ibz_copy(&x.denom, &lats1[i].denom);
+
+        if (quat_alg_elem_is_zero(&x)) {
+            quat_alg_elem_finalize(&x);
+            continue;
+        }
+
+        quat_left_ideal_t I_off, I_on;
+        quat_left_ideal_init(&I_off);
+        quat_left_ideal_init(&I_on);
+
+        quat_mlll_gram_set_prealloc_mode(0);
+        quat_lideal_create_mlll_gram(&I_off, &x, &norms1[i], &(order.order), &alg);
+
+        quat_mlll_gram_set_prealloc_mode(1);
+        quat_lideal_create_mlll_gram(&I_on, &x, &norms1[i], &(order.order), &alg);
+
+        if (!quat_lattice_equal(&I_off.lattice, &I_on.lattice)) {
+            printf("  FAIL: alg3 trial %d: ideal lattice differs between prealloc 0 and 1\n", i);
+            res = 1;
+        }
+        if (ibz_cmp(&I_off.norm, &I_on.norm) != 0) {
+            printf("  FAIL: alg3 trial %d: norms differ between prealloc 0 and 1\n", i);
+            res = 1;
+        }
+
+        quat_left_ideal_finalize(&I_off);
+        quat_left_ideal_finalize(&I_on);
+        quat_alg_elem_finalize(&x);
+    }
+
+    quat_mlll_gram_set_prealloc_mode(saved_mode);
+
+    if (res == 0)
+        printf("  PASS: quat_test_mlll_gram_prealloc_equivalence (%d trials, alg2+alg3)\n", trials);
+
+cleanup:
+    for (int i = 0; i < trials; i++) {
+        quat_lattice_finalize(&lats1[i]);
+        quat_lattice_finalize(&lats2[i]);
+        ibz_finalize(&norms1[i]);
+    }
+    free(lats1); free(lats2); free(norms1);
+    quat_lattice_finalize(&(order.order));
+    quat_alg_elem_finalize(&(order.t));
+    quat_alg_elem_finalize(&(order.z));
+    quat_alg_finalize(&alg);
+    ibz_finalize(&prime);
+    return res;
+}
+
 /* ========== Corner-case tests: minimal / rank-deficient / zero inputs ========== */
 
 /* Helper: check all entries of column c in basis are zero */
@@ -950,6 +1091,7 @@ quat_test_mlll_all(void)
     res |= quat_test_mlll_tau_path();
     res |= quat_test_mlll_gram_equivalence();
     res |= quat_test_lideal_create_gram_equivalence();
+    res |= quat_test_mlll_gram_prealloc_equivalence();
     res |= quat_test_mlll_all_zero_generators();
     res |= quat_test_mlll_single_generator();
     res |= quat_test_mlll_two_generators_dependent();
