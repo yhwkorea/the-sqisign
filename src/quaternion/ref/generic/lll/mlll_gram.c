@@ -96,21 +96,30 @@ quat_mlll_gram_get_fp_mode(void)
  * +64 bit margin beyond the max-observed value — tracked in
  * project_sqisign_mlll.md B*_{1,3,5} table.
  *
+ * Thresholds pinned to actual QUATALG_PINFTY.p bitsize (L1 251b / L3 383b
+ * / L5 505b from precomp/ref/lvl{1,3,5}/quaternion_data.c limb literals,
+ * verified 2026-04-22). Earlier draft used 128/200/256 which confused
+ * the security parameter with prime bitsize. Because this function is
+ * only called in prealloc mode (not the default path), that confusion
+ * was benign (GMP auto-resizes), but it still handed out wrong hints.
+ * Same correction applied in `quat_fp_widths_from_alg`
+ * (quat_fixed_precision.c) where the miss was non-benign.
+ *
  * Returns 1 if level matched, 0 otherwise (no prealloc done in that case).
  */
 static int
 mlll_gram_level_hints(const quat_alg_t *alg, int *vec_bits, int *gram_bits)
 {
     int p_bits = ibz_bitsize(&alg->p);
-    if (p_bits <= 128) {             /* L1: p ~127 bits, vec 259, Gram 518 */
+    if (p_bits <= 256) {             /* L1: p ~251 bits, vec 259, Gram 518 */
         *vec_bits  = 320;            /* 5 u64 */
         *gram_bits = 576;            /* 9 u64 */
         return 1;
-    } else if (p_bits <= 200) {      /* L3: p ~193 bits, vec 391, Gram 782 */
+    } else if (p_bits <= 384) {      /* L3: p ~383 bits, vec 391, Gram 782 */
         *vec_bits  = 448;            /* 7 u64 */
         *gram_bits = 832;            /* 13 u64 */
         return 1;
-    } else if (p_bits <= 256) {      /* L5: p ~254 bits, vec 513, Gram 1026 */
+    } else if (p_bits <= 512) {      /* L5: p ~505 bits, vec 513, Gram 1026 */
         *vec_bits  = 576;            /* 9 u64 */
         *gram_bits = 1088;           /* 17 u64 */
         return 1;

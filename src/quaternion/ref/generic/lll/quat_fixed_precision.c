@@ -1,3 +1,5 @@
+/* AUDIT TEMP 2026-04-22: uncomment to force trap on any non-zero slot. */
+/* #define MLLL_FP_TRAP_SELFTEST 1 */
 /**
  * @file quat_fixed_precision.c
  * @brief Phase 2 candidate C — stack fixed-precision integer ops.
@@ -52,18 +54,26 @@ fp_stub(const char *fname)
 int
 quat_fp_widths_from_alg(quat_fp_widths_t *out, const quat_alg_t *alg)
 {
+    /* Thresholds pinned to actual QUATALG_PINFTY.p bitsize, not the NIST
+     * security parameter. Verified from src/precomp/ref/lvl{1,3,5}/
+     * quaternion_data.c limb literals (2026-04-22):
+     *   L1 p = 251 bits, L3 p = 383 bits, L5 p = 505 bits
+     * The earlier draft used 128/200/256 which confused security bits with
+     * prime bits — that made L1 dispatch to L5 widths and L3/L5 silently
+     * fall back to the ibz path (fp never ran for L3/L5 in production).
+     * See FIXED_PRECISION_DECISION_KO.md §6.7 for the audit trail. */
     int p_bits = ibz_bitsize(&alg->p);
-    if (p_bits <= 128) {
+    if (p_bits <= 256) {            /* L1: actual p ~251 bits */
         out->nwords_vec  = NWORDS_QUAT_VEC_L1;
         out->nwords_gram = NWORDS_QUAT_GRAM_L1;
         out->nwords_tmp  = NWORDS_QUAT_TMP_L1;
         return 1;
-    } else if (p_bits <= 200) {
+    } else if (p_bits <= 384) {     /* L3: actual p ~383 bits */
         out->nwords_vec  = NWORDS_QUAT_VEC_L3;
         out->nwords_gram = NWORDS_QUAT_GRAM_L3;
         out->nwords_tmp  = NWORDS_QUAT_TMP_L3;
         return 1;
-    } else if (p_bits <= 256) {
+    } else if (p_bits <= 512) {     /* L5: actual p ~505 bits */
         out->nwords_vec  = NWORDS_QUAT_VEC_L5;
         out->nwords_gram = NWORDS_QUAT_GRAM_L5;
         out->nwords_tmp  = NWORDS_QUAT_TMP_L5;
