@@ -450,15 +450,31 @@ quat_fp_gram_sub_tmp(quat_fp_gram_t *r, const quat_fp_tmp_t *t,
 
 /* ---------- Overflow trap ----------
  *
- * Policy: magnitude bitsize must fit in `(nwords - 1) * 64` bits. That
- * reserves the topmost 64 bits as the sign-extension margin which
- * size-reduce relies on (a product `X * G[i][j]` can temporarily occupy
- * `vec + gram` bits in `tmp_product` before being subtracted back; the
- * result must land within budget or the narrow-subtract silently loses
- * bits). Phase 1 measured max-observed bitsize well under this bound
- * across L1/L3/L5 — a trap firing here signals either (a) a widths-table
- * miss or (b) a bug in the Lemma 3 argument, both of which are program
- * errors that should not silently corrupt the basis.
+ * Policy: magnitude bitsize must fit in `nwords * 64 - 2` bits.
+ *
+ * Why `-2` (and not `(nwords - 1) * 64` as the earlier draft claimed):
+ *  signed two's-complement `nwords` limbs represent values in
+ *  [-2^(nwords*64 - 1), 2^(nwords*64 - 1) - 1]. A single narrow-subtract
+ *  `r -= t` with both operands at max magnitude can produce a result with
+ *  |r - t| = 2^(nwords*64 - 1), which equals the edge of representable
+ *  range (one-bit headroom consumed). Reserving 2 bits (one sign bit +
+ *  one add/sub carry bit) keeps the post-mutation slot provably safe
+ *  against a single round of Cohen-style size-reduce.
+ *
+ *  Empirical peaks from Phase 1 (10k trials per level) fit within the
+ *  declared slot widths with the `-2` budget:
+ *    L1: vec peak 259b ≤ 318 budget (5*64-2), Gram peak 518b ≤ 574
+ *    L3: vec peak 391b ≤ 446 budget (7*64-2), Gram peak 782b ≤ 830
+ *    L5: vec peak 513b ≤ 574 budget (9*64-2), Gram peak 1026b ≤ 1086
+ *  Margins are 48-61 bits — healthy given Lemma 1/3 hold tight (vec ~
+ *  2*bitsize(p)+5, Gram = 2*vec).
+ *
+ *  The earlier `(nwords - 1) * 64` formulation was wrong: Phase 1 actually
+ *  shows the top limb is partially used for value bits (e.g. L1 vec peak
+ *  259 needs 3 bits of the 5th limb), not purely sign-extension margin.
+ *  A trap firing here now signals either (a) a widths-table miss or
+ *  (b) a bug in the Lemma 3 argument, both of which are program errors
+ *  that must not silently corrupt the basis.
  *
  * `site` labels the call location for the diagnostic; keep short.
  */
@@ -468,7 +484,13 @@ quat_fp_vec_check_overflow(const quat_fp_vec_t *v,
                            const char *site)
 {
     int bits = fp_limbs_bitsize(v->limbs, w->nwords_vec);
-    int budget = (int)(w->nwords_vec - 1) * 64;
+#ifdef MLLL_FP_TRAP_SELFTEST
+    /* Selftest mode: any non-zero magnitude must trap. Confirms the trap
+     * is actually wired through LTO / visibility / inlining. */
+    int budget = 1;
+#else
+    int budget = (int)w->nwords_vec * 64 - 2;
+#endif
     if (bits > budget) {
         fprintf(stderr,
                 "quat_fp_vec overflow at %s: %d bits > %d budget "
@@ -483,7 +505,11 @@ quat_fp_gram_check_overflow(const quat_fp_gram_t *g,
                             const char *site)
 {
     int bits = fp_limbs_bitsize(g->limbs, w->nwords_gram);
-    int budget = (int)(w->nwords_gram - 1) * 64;
+#ifdef MLLL_FP_TRAP_SELFTEST
+    int budget = 1;
+#else
+    int budget = (int)w->nwords_gram * 64 - 2;
+#endif
     if (bits > budget) {
         fprintf(stderr,
                 "quat_fp_gram overflow at %s: %d bits > %d budget "

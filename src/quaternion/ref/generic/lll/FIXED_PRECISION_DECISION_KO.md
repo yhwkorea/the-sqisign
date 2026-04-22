@@ -8,11 +8,19 @@ Phase: [PLAN_KO.md](PLAN_KO.md) Phase 2, 항목 P2-1
 
 Phase 1에서 10k trials × L1/L3/L5 측정으로 GRAM 경로 `vec`/`Gram` 폭을 확정했다(아래 표). Phase 2는 이 폭을 **실제로 고정폭 정수 레이아웃에 넣어** MLLL 내부 산술을 힙 할당 없이 돌리는 것.
 
-| Level | GRAM vec max | GRAM Gram max | 제안 typedef |
-|---|---|---|---|
-| L1 | 259 bits | 518 bits | vec 5×u64 (320b), Gram 9×u64 (576b) |
-| L3 | 391 bits | 782 bits | vec 7×u64 (448b), Gram 13×u64 (832b) |
-| L5 | 513 bits | 1026 bits | vec 9×u64 (576b), Gram 17×u64 (1088b) |
+| Level | GRAM vec max | GRAM Gram max | typedef 폭 | vec budget = `nwords*64-2` | Gram budget |
+|---|---|---|---|---|---|
+| L1 | 259 bits | 518 bits | vec 5×u64 (320b), Gram 9×u64 (576b) | 318 (여유 59b) | 574 (여유 56b) |
+| L3 | 391 bits | 782 bits | vec 7×u64 (448b), Gram 13×u64 (832b) | 446 (여유 55b) | 830 (여유 48b) |
+| L5 | 513 bits | 1026 bits | vec 9×u64 (576b), Gram 17×u64 (1088b) | 574 (여유 61b) | 1086 (여유 60b) |
+
+**Budget 공식**: 두 보수(two's complement) `nwords` limb의 대표 범위 `[-2^(nwords*64-1), 2^(nwords*64-1)-1]`에서 부호 비트 1 + add/sub carry 비트 1 = 2 비트를 예약 → `nwords*64 - 2` (§6.4). 초기 초안의 `(nwords-1)*64` 공식은 **잘못**이었다. 실제로 L1 vec peak 259b는 5번째 limb의 3 비트를 쓰고 있어 "상위 limb 전체를 sign margin으로 예약"이라는 전제가 성립하지 않는다.
+
+**이론적 worst-case** (empirical peak와 일치 검증):
+- **vec** — Lemma 1에 의해 `2·bitsize(p) + ⌈log₂ n⌉ + c` (n=16 generator, c=1로 관측). L1: 2·128+4+1 = 261 (측정 259), L3: 2·193+4+1 = 391 (측정 391, **정확 일치**), L5: 2·254+4+1 = 513 (측정 513, **정확 일치**).
+- **Gram (tight)** — 실측은 `Gram = 2·vec` (post-reduce에서 `p`-scaled 항이 소거). L1: 2·259 = 518 (측정 518), L3: 2·391 = 782 (측정 782), L5: 2·513 = 1026 (측정 1026).
+- **Gram (loose)** — 중간 연산에서 `p·|a|²` 항이 살아 있는 scratch-path는 `2·b_v + bitsize(p) + 2`. 이 경로는 `vec4_dot_p` 계산이 해당되어 §6.3-b에서 `ibz_t` scratch로 bypass 처리됨.
+- **중간 버퍼** `quat_fp_tmp_t = nwords_vec + nwords_gram + 1` limb (L1: 15, L3: 21, L5: 27) — `q·g_{ik}` 같은 중간곱은 storage slot보다 커질 수 있어 별도 scratch를 갖는다. Gram slot에는 narrow-sub 결과만 들어가므로 `nwords_gram*64-2` 예산 안에서만 검사.
 
 **전제**
 - GRAM 경로만 전환 (Cohen 경로는 Lemma 3 밖이라 고정폭 불가능, 비교/교차검증용 유지).
@@ -278,10 +286,12 @@ Primary는 fp지만 ibz body와 B prealloc scaffold는 **제거하지 않는다*
 - [x] **P2-C-gram-c** Mul 구현: **schoolbook 자작 채택**. 근거: 고정폭 5×5 ~ 17×17 digit 규모라 `mpn_mul` 호출 overhead가 schoolbook inline 이득을 상쇄. 별도 micro-bench 없이 schoolbook 직행 — `mpn_mul` wrapper 경로는 §5.6 결과에서 primary 탈락이 확정되면서 **micro-bench 수행 moot**.
 - [x] **P2-C-gram-d** Division: 원래 계획은 Cohen 점화식의 exact div였으나 §7-2에서 이미 Phase 2 scope 밖으로 드롭 확정. `quat_mlll_gram`은 L² 기반이라 integer exact div를 사용하지 않는다 → 구현 **불필요**, 체크 대상 없음.
 
-### 6.4. P2-overflow: Overflow trap (C 경로 전용) — 2026-04-21 완료 (커밋 `58540b1`)
+### 6.4. P2-overflow: Overflow trap (C 경로 전용) — 2026-04-21 완료 (커밋 `58540b1`) / 2026-04-22 budget 정정
 
-- [x] **P2-overflow-a** `quat_fp_vec_check_overflow` / `quat_fp_gram_check_overflow`가 각 mutation site에서 `fp_limbs_bitsize()`를 budget(`(nwords-1)*64`)과 비교, 초과 시 `fprintf(stderr) + abort()`. Release 빌드에서도 활성(매크로 `FP_CHECK_VEC`/`FP_CHECK_GRAM`).
+- [x] **P2-overflow-a** `quat_fp_vec_check_overflow` / `quat_fp_gram_check_overflow`가 각 mutation site에서 `fp_limbs_bitsize()`를 budget과 비교, 초과 시 `fprintf(stderr) + abort()`. Release 빌드에서도 활성(매크로 `FP_CHECK_VEC`/`FP_CHECK_GRAM`).
 - [x] **P2-overflow-b** 컴파일 플래그 `MLLL_FP_NO_OVERFLOW_CHECK`로 trap 비활성화 빌드 가능 (§5.6 trap-off 측정에 사용). 현재는 빌드-타임 플래그; 런타임 토글은 차후 과제(§7-6).
+- [x] **P2-overflow-c (2026-04-22)** Budget 공식 정정. 초기 `(nwords-1)*64`는 "상위 limb 전체를 sign-extension margin으로 예약"이라는 잘못된 margin narrative였음 — capacity sweep에서 L3 vec peak 391b가 이 budget(384b)을 초과했음에도 trap이 발동하지 않아 정체가 드러남. 정정된 공식은 `nwords*64 - 2` (부호 1 + carry 1). 새 budget 하 Phase 1 peak는 모두 48-61b 여유로 들어감(§1 표). 측정 peak와 이론 worst-case(`2·bitsize(p) + ⌈log₂ n⌉ + 1`)가 L3/L5에서 정확히 일치하므로 여유는 조작 가능한 값이 아닌 Lemma 1/3의 실제 tight bound에서 온 것.
+- [x] **P2-overflow-d (2026-04-22)** Trap 감사 재수행. **결론**: trap 자체는 기능하지만 **L3/L5에서는 fp path가 애초에 돌고 있지 않았다** — 그래서 초안 budget 초과에도 abort가 뜨지 않은 것. 자세한 내용은 §6.7 참조.
 
 ### 6.5. P2-equiv: 동치성 + 성능 비교 — 2026-04-21 완료 (커밋 `97eb079` 및 sweep 아티팩트)
 
@@ -300,6 +310,59 @@ Primary는 fp지만 ibz body와 B prealloc scaffold는 **제거하지 않는다*
 - [x] **P2-decide-b** 본 문서 §5.1 "결정" 재확정(오전 baseline → 오후 fp로 flip) + §5.6 "trade-off 기록" 재해석 + §5.7 "oracle 보존" 재작성.
 - [x] **P2-decide-c** 탈락 경로 제거 여부: **모두 유지**. ibz body는 fp 회귀 oracle, B prealloc은 ibz 서브튜닝 도구. 유지 비용 negligible. §7-4 동시 해결.
 - [x] **P2-decide-d** `PLAN_KO.md` Phase 2 완료 체크 반영. Phase 3는 fp primary 위에 직접 쌓는다 — 추가 blocker 없음.
+
+### 6.7. P2-trap-audit: Trap 감사 재수행 — 2026-04-22
+
+**착수 동기**: capacity sweep (§6.4-c)에서 L3 vec peak 391 > 초안 budget 384인데 abort 안 뜬 정황. budget 공식 정정(§6.4-c) 외 **trap 자체가 dead 되어 있을 가능성**을 감사.
+
+**방법**: `quat_fp_vec_check_overflow` / `quat_fp_gram_check_overflow` 안에 `#ifdef MLLL_FP_TRAP_SELFTEST` 브랜치 추가 — budget 을 1 bit 로 축소해 정상 값이면 무조건 trap. Selftest flag 활성화 빌드로 L1/L3/L5 × alg3 × 1 iter 실행, `abort()` 발생 여부 확인.
+
+**결과**:
+
+| Level | Prime bits | SELFTEST 결과 | 해석 |
+|---|---|---|---|
+| L1 | 251 | `quat_fp_vec overflow at load_gen0: 129 bits > 1 budget (nwords_vec=9)` → `Aborted (core dumped)` | fp path 진입 + trap 발동 ✓ |
+| L3 | 375 | 정상 완료 (abort 없음, GRAM summary 출력 ) | **fp path 진입 자체 안 함** |
+| L5 | 473 | 정상 완료 (abort 없음, GRAM summary 출력) | **fp path 진입 자체 안 함** |
+
+**진단: Dispatcher 임계값이 실제 소수 bitsize와 안 맞음**.
+
+`quat_fp_widths_from_alg` (`quat_fixed_precision.c:55-76`) 분기:
+```
+if (p_bits <= 128) → L1 widths (nwords_vec=5)
+else if (p_bits <= 200) → L3 widths (nwords_vec=7)
+else if (p_bits <= 256) → L5 widths (nwords_vec=9)
+else: nwords=0, return 0
+```
+
+실측 소수 bitsize:
+- L1 `mlll_benchmark.c:252-254` prime → **251 bits** → `p_bits <= 256` 적중 → **L5 widths 적용** (nwords_vec=9)
+- L3 `mlll_benchmark.c:247-249` prime → **375 bits** → 어느 branch도 안 걸림 → **return 0**
+- L5 `mlll_benchmark.c:242-244` prime → **473 bits** → 어느 branch도 안 걸림 → **return 0**
+
+Dispatcher (`mlll_gram.c:803-813`)는 `widths_from_alg` 실패 시 조용히 ibz path로 fallback. 그래서 `--fp` 플래그가 L3/L5 에서 **silent no-op**였음.
+
+**파급 (Phase 2 측정·결정에 영향)**:
+
+1. **§5.6 3-way sweep 시간 표 무효화 영역**:
+   - L3 alg2/alg3, L5 alg2/alg3 의 "fp" 컬럼 수치는 fp가 아닌 **ibz+prealloc-off 런타임**이었음 (4행). 그래서 "동률"로 보였던 것. 진짜 fp/ibz 비율은 **미측정 상태**.
+   - L1 alg2/alg3 의 "fp" 컬럼은 fp 구동은 맞지만 **L5 widths (nwords_vec=9, nwords_gram=17)** 위에서 돌아감. 실제 L1 widths(5/9)로 돌린 수치가 아니므로 L1 5.25× 퇴행은 L1 고유가 아닌 L5-크기 schoolbook 비용.
+2. **§5.1 4-기준 평가 부분 무효화**:
+   - 기준 (1) heap-free / (2) Lemma 3 런타임 감사 / (4) CT 여지는 **L1만** 실제 입증. L3/L5는 명목상 fp 모드지만 런타임에는 ibz가 돈 상태.
+   - 기준 (3) contribution 코드 입증은 "코드가 존재한다" 수준은 유지되지만 "고정폭 슬롯에 실제 값이 들어간다"는 **L1 + wrong-width** 범위로 축소.
+3. **§6.4 capacity sweep** (270 iter trap 발동 0건) 은 L3/L5 에서 **ibz path 실측 peak 를 기록한 것**. fp path 슬롯 경로는 경로 자체가 실행되지 않아 sweep 결과는 budget 검증 근거가 될 수 없음. 오직 L1 만 fp 실측인데 그것도 L5 widths 기준.
+4. **§6.5 equivalence**: ibz↔fp 비트 동일 주장은 **L1 한정**으로만 실검증되었을 가능성. L3/L5 는 fp가 안 돌았으므로 "fp 출력"이 실제로 ibz 출력과 같은 코드를 거친 것.
+
+**trap 자체는 살아있음 확정** (L1 SELFTEST에서 abort 정상 발동). LTO / hidden visibility / 인라인으로 인한 trap 제거는 아님.
+
+**후속 조치 (Phase 2.1 추가 필요)**:
+
+- [ ] **P2.1-dispatch** `quat_fp_widths_from_alg` 임계값을 실제 SQIsign 소수 bitsize에 맞게 재지정 (`<=252` → L1, `<=376` → L3, `<=474` → L5, else 0). 또는 `quat_alg_t`에 명시적 level tag를 두고 그것으로 분기 (bitsize는 휴리스틱이라 prime 세부 구조 바뀌면 또 깨짐).
+- [ ] **P2.1-widths-rerun** 수정된 dispatcher로 §6.4 capacity sweep 재수행. 모든 레벨에서 fp path가 실제로 실행되는지 새 SELFTEST로 먼저 재검증.
+- [ ] **P2.1-time-rerun** §5.6 시간 표 재측정. L3/L5 fp vs ibz 비율이 실제로 어느 수준인지 처음으로 확인. L1 은 L5 widths 오버사이징에서 해방되면 퇴행 감소 가능성.
+- [ ] **P2.1-equiv-rerun** `quat_test_mlll_gram_fp_equivalence` 를 L1/L3/L5 3레벨 모두 강제 실행하도록 보강. 현재는 L5 random 16-gen 케이스만 있고 L3/L5는 dispatcher bypass로 ibz↔ibz 비교한 상태.
+
+**잠정 상태**: Phase 2 "primary 확정"은 L1 부분 관찰 기반. L3/L5 는 사실상 미검증. Phase 3 착수 전 Phase 2.1 수행이 선행 조건.
 
 ## 7. 열린 질문 / 검증 필요
 

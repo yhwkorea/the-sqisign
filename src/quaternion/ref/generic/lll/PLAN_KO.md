@@ -63,7 +63,7 @@
 - [x] **P2-B** B 구현: `ibz_t` + `mpz_realloc2` prealloc scaffold (2026-04-21). 동치성 검증 PASS, 벤치 결과 hint only 확인 — B 단독으로는 목표 미달성, reference oracle로 유지. 상세: `FIXED_PRECISION_DECISION_KO.md` §5.5.
 - [x] **P2-C-types** Per-level 폭 매크로 + 런타임 descriptor(`quat_fp_widths_t`) + 단일 최대폭 array. Two's complement storage + sign-magnitude mul 확정. 상세: `FIXED_PRECISION_DECISION_KO.md` §6.2.
 - [x] **P2-C-gram** `quat_mlll_gram_fp` 본체 + dispatcher + fp-native size-reduce/swap/Gram update. `vec4_dot_p`만 ibz scratch bypass (L1 중간값 예산 초과). 상세: §6.3.
-- [x] **P2-overflow** `FP_CHECK_VEC`/`FP_CHECK_GRAM` 매크로로 mutation site 마다 `(nwords-1)*64` 비트 budget 초과 시 `abort()`. `MLLL_FP_NO_OVERFLOW_CHECK` 빌드 플래그로 비활성 가능. Sweep 270 iter에서 trap 발동 0건.
+- [x] **P2-overflow** `FP_CHECK_VEC`/`FP_CHECK_GRAM` 매크로로 mutation site 마다 budget 초과 시 `abort()`. `MLLL_FP_NO_OVERFLOW_CHECK` 빌드 플래그로 비활성 가능. **Budget 정정 (2026-04-22)**: 초기 공식 `(nwords-1)*64`는 margin narrative가 틀렸음이 확인됨(L3 vec peak 391b > 384b인데 trap 미발동). 정정된 공식 `nwords*64 - 2` (부호 1 + carry 1)로 L1/L3/L5 모두 48-61b 여유. 상세: `FIXED_PRECISION_DECISION_KO.md` §1, §6.4-c. Trap 감사 재수행은 §6.4-d에서 진행.
 - [x] **P2-equiv** 2-way pairwise 테스트 3개(ibz↔HNF, ibz↔B, ibz↔fp)로 HNF↔ibz↔B↔fp transitive equivalence. `quat_test_mlll_gram_fp_equivalence` PASS.
 - [x] **P2-decide** Primary = **C fp 경로** (`quat_mlll_gram_fp`) 최종 채택 (2026-04-21). `g_fp_mode = 1` 기본값. 결정 기준은 논문 contribution 4축(heap-free / Lemma 3 runtime 감사 / compact 연산 고정폭 입증 / CT 호환 여지) — fp가 유일 만족. ibz body는 fp 회귀 oracle로 보존. 시간 퇴행(L1 Alg 2 5.25×)은 수용 trade-off.
 
@@ -76,6 +76,17 @@
 **Why**: KLKL25(eprint 2025/1649)의 핵심 주장 "compact 연산이 고정폭에 실제로 들어간다"를 코드로 입증하는 것이 Phase 2의 본래 기준. 시간은 이 기준의 일부가 아님 — primary는 4축 만족 여부로 결정. Phase 3는 fp primary 위에 직접 쌓는다.
 
 **전제**: Phase 1 완료 (typedef 폭이 L3/L5 재측정으로 확정됨). ✅
+
+### Phase 2.1 — Dispatcher 임계값 수정 + fp 경로 실재성 재검증 (착수 필요, 2026-04-22)
+
+**Why**: 2026-04-22 trap 감사(`FIXED_PRECISION_DECISION_KO.md` §6.7)에서 `quat_fp_widths_from_alg`의 임계값 128/200/256이 실제 SQIsign 소수 bitsize 251/375/473와 맞지 않아 **L3/L5에서 fp path가 조용히 미동작**(ibz fallback), **L1은 L5 widths로 오버사이징 동작**임이 SELFTEST 로 확정. Phase 2 측정 및 primary 결정 중 L3/L5 부분은 사실상 **fp 미검증 상태**.
+
+- [ ] **P2.1-dispatch** `quat_fp_widths_from_alg` 임계값 재지정 (`<=252`/`<=376`/`<=474`) 또는 `quat_alg_t` 에 명시적 level tag 도입
+- [ ] **P2.1-widths-rerun** 수정된 dispatcher로 SELFTEST 3레벨 모두 abort 확인 → capacity sweep 재수행
+- [ ] **P2.1-time-rerun** §5.6 3-way 시간 표 재측정. L3/L5 fp vs ibz 실비율 최초 확인
+- [ ] **P2.1-equiv-rerun** `quat_test_mlll_gram_fp_equivalence` 3레벨 강제 실행 보강
+
+**blocker**: Phase 3 착수 선행 조건. Phase 2 결론 중 L3/L5 관련 모든 수치 재평가 대상.
 
 ### Phase 3 — Alg 1/4 MLLL 버전 구현 (1-2주)
 
@@ -133,8 +144,9 @@
 | Phase | 기간 | 누적 | 상태 |
 |---|---|---|---|
 | P1 측정 | ~2d | 2026-04-21 | ✅ 완료 |
-| P2 fixed-precision | ~11-14d → 1d | 2026-04-21 | ✅ **완료 — baseline 유지 확정** (primary 승격 후보 없음) |
-| P3 Alg 1/4 | ~2w | ~2026-05-05 | 착수 가능 |
+| P2 fixed-precision | ~11-14d → 1d | 2026-04-21 | ⚠️ **부분완료** (L1 한정 검증, 2026-04-22 trap 감사로 L3/L5 fp 미동작 발견) |
+| P2.1 dispatcher 수정 | ~1-2d | 2026-04-23~24 | **착수 필요** (Phase 3 blocker) |
+| P3 Alg 1/4 | ~2w | ~2026-05-05 | P2.1 완료 후 착수 |
 | P4 SQIsign 통합 | ~3w | ~2026-05-26 | |
 | P5 PR 분리 | ~1w | ~2026-06-02 | |
 
