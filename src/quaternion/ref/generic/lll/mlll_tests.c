@@ -972,25 +972,60 @@ quat_test_mlll_gram_fp_equivalence(void)
         quat_alg_finalize(&alg);
     }
 
-    /* L5-width coverage: realistic-sized prime (~255 bits) with 16 random
-     * generators bounded by p. Smallest ibz-wide case that actually walks
-     * the 17-limb gram path. Seed is fixed so the trial is reproducible. */
-    {
+    /* Per-level width coverage with production-matching prime bitsize.
+     * Post-2026-04-22 dispatcher fix (§6.8), each of the three L1/L3/L5
+     * branches of `quat_fp_widths_from_alg` selects a distinct widths
+     * table. We exercise all three so fp-path bugs can't hide in a branch
+     * we never visited. Primes replicate the MSB pattern of
+     * `precomp/ref/lvl{1,3,5}/quaternion_data.c` QUATALG_PINFTY.p so
+     * ibz_bitsize lands in the correct band:
+     *   L1: 251 bits  (top limb 0x4ff..ff, 4 limbs)
+     *   L3: 383 bits  (top limb 0x40ff..ff, 6 limbs)
+     *   L5: 505 bits  (top limb 0x01af..ff, 8 limbs)
+     * 16 random generators bounded by floor(sqrt(p)) so Lemma 3
+     * `|<a, b>| ≈ a_bits + b_bits + p_bits + log n` stays within the
+     * per-level Gram budget. Using bound=p would yield `|<a,b>| ~ 3*p_bits`
+     * and blow the Gram slot even at L1. Fixed per-block seed. */
+    struct {
+        const char *hex;
+        const char *label;
+        uint32_t    seed;
+    } level_cases[] = {
+        { "4fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "fp_L1_16gen_prod_p251", 0xF0CACC1A },
+        { "40ffffffffffffff"
+          "ffffffffffffffff"
+          "ffffffffffffffff"
+          "ffffffffffffffff"
+          "ffffffffffffffff"
+          "ffffffffffffffff",
+          "fp_L3_16gen_prod_p383", 0xA1B2C3D4 },
+        { "01afffffffffffff"
+          "ffffffffffffffff"
+          "ffffffffffffffff"
+          "ffffffffffffffff"
+          "ffffffffffffffff"
+          "ffffffffffffffff"
+          "ffffffffffffffff"
+          "ffffffffffffffff",
+          "fp_L5_16gen_prod_p505", 0xDEADBEEF },
+    };
+
+    for (size_t k = 0; k < sizeof(level_cases) / sizeof(level_cases[0]); k++) {
         quat_alg_t alg;
         ibz_t prime;
         ibz_init(&prime);
-        ibz_set_from_str(&prime,
-            "4ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-            16);
+        ibz_set_from_str(&prime, level_cases[k].hex, 16);
         quat_alg_init_set(&alg, &prime);
 
-        uint32_t seed[12] = { 0xF0CACC1A };
+        uint32_t seed[12] = { 0 };
+        seed[0] = level_cases[k].seed;
         randombytes_init((unsigned char *)seed, NULL, 256);
 
         ibz_t bound, neg_bound;
         ibz_init(&bound);
         ibz_init(&neg_bound);
-        ibz_copy(&bound, &prime);
+        ibz_sqrt_floor(&bound, &prime);
         ibz_neg(&neg_bound, &bound);
 
         ibz_vec_4_t gens[16];
@@ -999,7 +1034,7 @@ quat_test_mlll_gram_fp_equivalence(void)
             for (int j = 0; j < 4; j++)
                 ibz_rand_interval(&gens[i][j], &neg_bound, &bound);
 
-        res |= compare_mlll_vs_gram(gens, 16, &alg, "fp_L5_16gen_random");
+        res |= compare_mlll_vs_gram(gens, 16, &alg, level_cases[k].label);
 
         for (int i = 0; i < 16; i++) ibz_vec_4_finalize(&gens[i]);
         ibz_finalize(&bound);
