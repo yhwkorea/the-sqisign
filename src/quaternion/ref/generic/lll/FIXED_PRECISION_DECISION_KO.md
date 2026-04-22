@@ -189,39 +189,40 @@ B 후보 scaffold(`quat_mlll_gram` 진입부에서 `b[]`/`G[][]`/`X`/`tmp` 전�
 
 ### 5.6. 2026-04-21 P2-decide 실측: 시간 trade-off 기록 (결정 기준 아님)
 
-C 구현(`quat_fixed_precision.[hc]` + `quat_mlll_gram_fp` + dispatcher + overflow trap) 완료 후 3-way 스윕 실행 (`bench_logs/p2_phase2_sweep/`, 30 iter/combo, L1/L3/L5 × alg2/alg3 × baseline(ibz)/prealloc/fp).
+C 구현(`quat_fixed_precision.[hc]` + `quat_mlll_gram_fp` + dispatcher + overflow trap) 완료 후 3-way 스윕 실행 (`bench_logs/p2_phase2_sweep/`, L1/L3/L5 × alg2/alg3 × baseline(ibz)/prealloc/fp).
 
 **본 표는 primary 결정이 아니라 "primary를 fp로 잡았을 때 감수해야 하는 시간 비용" 기록용.** 결정 기준은 §5.1 4개(heap-free / Lemma 3 감사 / contribution 입증 / CT 여지).
 
-**결과** (GRAM total ms, 30 iter 합, trap-on 기본 빌드):
+**[2026-04-22 갱신] P2.1-time-rerun** — dispatcher 임계값 정정(§6.8) 후 재측정. iter 분할(alg2=500, alg3=5000)로 variance 완화. L3/L5 fp 는 **이 표가 최초 실측** (이전은 silent ibz fallback, §6.7 참조).
 
-| Level | Mode | baseline(ibz) | prealloc | fp (primary) | fp/ibz |
-|---|---|---:|---:|---:|---:|
-| L1 | alg2 | 12.78 | 12.81 | **67.10** | 5.25× |
-| L1 | alg3 |  0.33 |  0.46 |   0.60 | 1.82× |
-| L3 | alg2 | 20.09 | 19.45 |  19.79 | 0.98× |
-| L3 | alg3 |  0.34 |  0.34 |   0.38 | 1.12× |
-| L5 | alg2 | 26.44 | 26.11 |  26.25 | 0.99× |
-| L5 | alg3 |  0.33 |  0.34 |   0.33 | 1.00× |
+**결과** (GRAM total ms, trap-on 기본 빌드, `bench_logs/p2_phase2_sweep/L{1,3,5}_{alg2,alg3}_{baseline,prealloc,fp}.log`):
 
-**Trap overhead 격리** (`MLLL_FP_NO_OVERFLOW_CHECK=1` 빌드, 동일 입력):
+| Level | Mode | Iter | baseline(ibz) | prealloc | fp (primary) | fp/ibz |
+|---|---|---:|---:|---:|---:|---:|
+| L1 | alg2 |  500 |  215.25 |  216.59 |   707.29 | 3.29× |
+| L1 | alg3 | 5000 |   50.19 |   60.74 |    89.69 | 1.79× |
+| L3 | alg2 |  500 |  336.14 |  336.07 |  1338.15 | 3.98× |
+| L3 | alg3 | 5000 |   53.00 |   66.70 |    99.08 | 1.87× |
+| L5 | alg2 |  500 |  443.60 |  447.09 |  2121.61 | 4.78× |
+| L5 | alg3 | 5000 |   55.15 |   70.93 |   104.58 | 1.90× |
 
-| Level | Mode | fp (trap-on) | fp (trap-off) | trap 기여분 |
-|---|---|---:|---:|---:|
-| L1 | alg2 | 67.10 | 60.28 | ~10% (6.82 ms / 54 ms 퇴행) |
-| L1 | alg3 |  0.60 |  0.58 | 미미 |
+**pre-fix(2026-04-21) 대비 변화**:
+- L1 alg2 fp/ibz: 5.25× → **3.29×** (L5 widths 오버사이징 해소 효과).
+- L3 alg2 fp/ibz: 0.98× → **3.98×** (이전은 ibz fallback이라 "동률"이었음).
+- L5 alg2 fp/ibz: 0.99× → **4.78×** (동일 이유).
+- Alg 3 는 전 레벨 1.79~1.90× 로 안정. 1-limb special case 비중이 적은 경로라 퇴행 적음.
 
-**퇴행 원인 (L1 중심)**:
-- GMP `ibz_mul`/`ibz_add`는 operand가 1-limb(L1에선 size-reduce 이후 대부분)일 때 내부 dispatch로 `mpn_mul_1` 또는 1-limb special case로 빠진다.
-- 우리 schoolbook `fp_mul`은 항상 `nwords_vec × nwords_vec` (L1의 경우 5×5, 5×9) 전체 limb 작업 — 고정폭 설계상 dispatch 불가.
-- Overflow trap은 전체 퇴행의 ~10%에 불과 → trap 제거해도 L1 문제 해결 안 됨. 근본 원인은 schoolbook inner loop.
+**Trap overhead 격리** — P2.1 재측정 미수행(기존 추정 유지). L1 alg2 기준 trap 기여분 ~10%, trap 제거해도 근본 원인(schoolbook inner loop) 동일.
 
-**L3/L5 동률**: 1-limb special case가 덜 발동하므로 fp도 baseline에 근접. fp가 크게 이기지도 지지도 않음.
+**퇴행 원인**:
+- GMP `ibz_mul`/`ibz_add`는 operand가 1-limb인 경우(특히 size-reduce 이후) 내부 dispatch로 `mpn_mul_1` 또는 1-limb special case로 빠진다. L1 뿐 아니라 L3/L5 도 alg2 경로에서 schoolbook vs mpn_mul_1 차이가 크게 나타남.
+- 우리 schoolbook `fp_mul`은 항상 `nwords_vec × nwords_vec` (L1: 5×5, L3: 7×7, L5: 9×9) 전체 limb 작업 — 고정폭 설계상 dispatch 불가.
+- Alg 3 는 1-limb special case 비중이 낮아 schoolbook이 상대적으로 덜 손해. 그래서 1.8~1.9× 수준 유지.
 
-**Trade-off 수용 판단**:
-- L1 Alg 2의 5.25× 퇴행이 프로덕션 hot path(MLLL은 Alg 2 기준 전체 signing 시간의 O(ms) 수준)에 추가하는 절대 시간 ≈ 54 ms / 30 iter = **1.8 ms per call**. SQIsign 전체 signing 시간 대비 작은 비중.
-- Phase 2 이후 재설계(size-reduce 1-limb fast path inline 또는 `mpn_mul_1` bridge)로 완화 가능 — fp 타입 이미 자리 잡혀 있어 진입 비용 낮음 (§5.7 3번).
-- 4개 결정 기준(§5.1) 만족도가 절대적으로 높기에 수용.
+**Trade-off 수용 판단 (재평가)**:
+- 최악 퇴행은 L5 alg2 4.78×, 절대 시간 ≈ (2121.61 − 443.60) / 500 = **3.36 ms per call** 추가. L1 alg2는 (707.29 − 215.25) / 500 = **0.98 ms per call**.
+- Alg 3(Random Equivalent, keygen hot path 중 하나)는 per-call 마진 작음: L5 기준 (104.58 − 55.15) / 5000 = **10 μs per call**.
+- 4개 결정 기준(§5.1) 만족도가 절대적으로 높기에 수용. 향후 재설계(`mpn_mul_1` 1-limb fast path) 적용 시 퇴행 감소 기대.
 
 ### 5.7. 회귀 oracle(ibz) + prealloc scaffold 보존 이유
 
@@ -412,19 +413,19 @@ else                    { return 0; }
 
 **§6.7 무효화 스코프 재정의**:
 
-1. §5.6 3-way sweep 시간 표: L3/L5 "fp" 컬럼은 여전히 **pre-fix ibz fallback 수치**. **Phase 2.1 후속 time re-run 필요** (P2.1-time-rerun).
+1. §5.6 3-way sweep 시간 표: **§5.6 재측정 완료** (P2.1-time-rerun). fp/ibz 비율 표 L1/L3/L5 × alg2/alg3 6-combo 갱신. pre-fix vs post-fix 비교도 §5.6에 병기.
 2. §6.4 capacity sweep: 본 절 표로 **대체**. L1/L3/L5 모두 실제 fp path 실측 budget 감사 완료.
-3. §6.5 equivalence: L1 is ibz↔fp 실제 비교 유효. L3/L5는 pre-fix 상태에서 fp가 안 돌았으므로 사실상 ibz↔ibz 비교. **재실행 필요** (P2.1-equiv-rerun).
-4. §5.1 4-기준 평가: 기준 (1)(2)(3)(4) 모두 **L1/L3/L5 전체에서 fp 경로 실증 완료** (본 절 SELFTEST + capacity sweep). L1에서 L5 widths 오버사이징 이슈도 **해소** (L1 nwords_vec=5, nwords_gram=9 로 정상 축소).
+3. §6.5 equivalence: **3-레벨 전면 재실행 완료** (P2.1-equiv-rerun). `mlll_tests.c:quat_test_mlll_gram_fp_equivalence` 에 L1 p=251, L3 p=383, L5 p=505 production-matching prime + 16 random gen (bound=sqrt(p)) 케이스 추가. 기존 p=7/19/11 소케이스(dispatcher L1 widths) + 3-레벨 신규 케이스 모두 PASS.
+4. §5.1 4-기준 평가: 기준 (1)(2)(3)(4) 모두 **L1/L3/L5 전체에서 fp 경로 실증 완료** (본 절 SELFTEST + capacity sweep + equivalence). L1에서 L5 widths 오버사이징 이슈도 **해소** (L1 nwords_vec=5, nwords_gram=9 로 정상 축소).
 
 **후속 잔여**:
 
-- [x] **P2.1-dispatch** 임계값 256/384/512 로 정정.
-- [x] **P2.1-widths-rerun** 3-레벨 SELFTEST + 6-combo capacity sweep 통과.
-- [ ] **P2.1-time-rerun** §5.6 재측정 (alg2 500 iter, alg3 5000 iter × L1/L3/L5 × ibz/prealloc/fp).
-- [ ] **P2.1-equiv-rerun** `quat_test_mlll_gram_fp_equivalence` L1/L3/L5 강제 실행.
+- [x] **P2.1-dispatch (2026-04-22)** 임계값 256/384/512 로 정정.
+- [x] **P2.1-widths-rerun (2026-04-22)** 3-레벨 SELFTEST + 6-combo capacity sweep 통과.
+- [x] **P2.1-time-rerun (2026-04-22)** alg2 500 iter + alg3 5000 iter × L1/L3/L5 × ibz/prealloc/fp 재측정. 결과 §5.6 표 갱신. L5 alg2 fp/ibz 4.78× 가 최악, Alg 3 는 전 레벨 1.79~1.90× 안정.
+- [x] **P2.1-equiv-rerun (2026-04-22)** `quat_test_mlll_gram_fp_equivalence` 에 L1/L3/L5 production-matching prime 케이스 추가. bound=sqrt(p)로 Lemma 3 충족. 3-레벨 PASS.
 
-**상태**: fp path가 드디어 3레벨 모두 돈다. Phase 2 근거의 상당 부분(capacity + 기준 평가)이 이 시점 이후로 **L3/L5 실측 기반**. 남은 time/equiv 재측정 완료 시점에 Phase 2 "primary 확정" 을 **3-레벨 전면 확정**으로 갱신 가능.
+**상태**: Phase 2.1 완료. Phase 2 "primary 확정"을 **3-레벨 전면 확정**으로 갱신. Phase 3 blocker 해제.
 
 ## 7. 열린 질문 / 검증 필요
 

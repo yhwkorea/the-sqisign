@@ -77,16 +77,16 @@
 
 **전제**: Phase 1 완료 (typedef 폭이 L3/L5 재측정으로 확정됨). ✅
 
-### Phase 2.1 — Dispatcher 임계값 수정 + fp 경로 실재성 재검증 (진행 중, 2026-04-22)
+### Phase 2.1 — Dispatcher 임계값 수정 + fp 경로 실재성 재검증 ✅ (완료, 2026-04-22)
 
-**Why**: 2026-04-22 trap 감사(`FIXED_PRECISION_DECISION_KO.md` §6.7)에서 `quat_fp_widths_from_alg`의 임계값 128/200/256이 실제 SQIsign 소수 bitsize 251/383/505와 맞지 않아 **L3/L5에서 fp path가 조용히 미동작**(ibz fallback), **L1은 L5 widths로 오버사이징 동작**임이 SELFTEST 로 확정. Phase 2 측정 및 primary 결정 중 L3/L5 부분은 사실상 **fp 미검증 상태**.
+**Why**: 2026-04-22 trap 감사(`FIXED_PRECISION_DECISION_KO.md` §6.7)에서 `quat_fp_widths_from_alg`의 임계값 128/200/256이 실제 SQIsign 소수 bitsize 251/383/505와 맞지 않아 **L3/L5에서 fp path가 조용히 미동작**(ibz fallback), **L1은 L5 widths로 오버사이징 동작**임이 SELFTEST 로 확정. Phase 2 측정 및 primary 결정 중 L3/L5 부분은 사실상 **fp 미검증 상태**였음.
 
 - [x] **P2.1-dispatch (2026-04-22)** `quat_fp_widths_from_alg` 임계값을 spec BITS 상수 기준 256/384/512로 정정. `mlll_gram_level_hints` 도 일관성 위해 동시 정정. §6.8 참조.
 - [x] **P2.1-widths-rerun (2026-04-22)** SELFTEST 3-레벨 모두 abort 확인 (L1:128b/nw5, L3:192b/nw7, L5:255b/nw9). 후속 capacity sweep 6-combo PASS (`bench_logs/p2_fp_capacity_verify/`). 최저 margin L3 alg2 Gram 52b.
-- [ ] **P2.1-time-rerun** §5.6 3-way 시간 표 재측정. L3/L5 fp vs ibz 실비율 최초 확인
-- [ ] **P2.1-equiv-rerun** `quat_test_mlll_gram_fp_equivalence` 3레벨 강제 실행 보강
+- [x] **P2.1-time-rerun (2026-04-22)** §5.6 3-way 시간 표 재측정 (alg2=500 iter, alg3=5000 iter). L1 alg2 fp/ibz 5.25×→3.29× (L5 오버사이징 해소 효과), L3/L5 alg2 는 최초 실측치 (3.98×, 4.78×), alg3 는 전 레벨 1.79~1.90× 안정.
+- [x] **P2.1-equiv-rerun (2026-04-22)** `quat_test_mlll_gram_fp_equivalence` 에 L1/L3/L5 production-matching prime (p=251/383/505) + 16 random gen (bound=sqrt(p)) 케이스 추가. 3-레벨 PASS.
 
-**blocker**: Phase 3 착수 선행 조건. Phase 2 결론 중 L3/L5 관련 수치 중 time/equiv 2축만 남은 상태 (capacity/기준평가는 §6.8에서 해소).
+**결과**: Phase 3 blocker 해제. Phase 2 primary 확정이 3-레벨 전면 실증 기반으로 갱신됨.
 
 ### Phase 3 — Alg 1/4 MLLL 버전 구현 (1-2주)
 
@@ -145,8 +145,8 @@
 |---|---|---|---|
 | P1 측정 | ~2d | 2026-04-21 | ✅ 완료 |
 | P2 fixed-precision | ~11-14d → 1d | 2026-04-21 | ⚠️ **부분완료** (L1 한정 검증, 2026-04-22 trap 감사로 L3/L5 fp 미동작 발견) |
-| P2.1 dispatcher 수정 | ~1-2d | 2026-04-23~24 | **착수 필요** (Phase 3 blocker) |
-| P3 Alg 1/4 | ~2w | ~2026-05-05 | P2.1 완료 후 착수 |
+| P2.1 dispatcher 수정 | ~1-2d → 1d | 2026-04-22 | ✅ **완료** (dispatch/widths/time/equiv 전 축 재검증, 3-레벨 PASS) |
+| P3 Alg 1/4 | ~2w | ~2026-05-05 | 착수 가능 |
 | P4 SQIsign 통합 | ~3w | ~2026-05-26 | |
 | P5 PR 분리 | ~1w | ~2026-06-02 | |
 
