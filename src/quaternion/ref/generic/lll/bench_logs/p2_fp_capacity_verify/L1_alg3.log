@@ -5,7 +5,7 @@ GRAM fp       (Phase 2 candidate C): ON
 
 Generating 5000 random ideal lattice pairs (bitsize=127)...
 Mode: alg3
-  Set 1: 6707.05 ms
+  Set 1: 6729.97 ms
 Generation done.
 
 T    |   Inp |  HNFint |  GRMtot    GRMv    GRMg |  HNFout  GRMout |  HNFms  GRMms
@@ -14,7 +14,7 @@ T    |   Inp |  HNFint |  GRMtot    GRMv    GRMg |  HNFout  GRMout |  HNFms  GRM
 === Alg 3 Summary ===
 HNF  intermediate:  avg=508  max=514
 GRAM total:         avg=508  max=514
-GRAM vec coords:    avg=128  max=129  (Lemma 1)
+GRAM vec coords:    avg=127  max=129  (Lemma 1)
 GRAM Gram entries:  avg=503  max=507  (Lemma 3)
-Output bits:        HNF avg=127 max=128  GRAM avg=127 max=128
-Total time:         HNF=79.29ms  GRAM=101.23ms  (GRAM/HNF=1.28)
+Output bits:        HNF avg=126 max=128  GRAM avg=126 max=128
+Total time:         HNF=78.24ms  GRAM=88.33ms  (GRAM/HNF=1.13)

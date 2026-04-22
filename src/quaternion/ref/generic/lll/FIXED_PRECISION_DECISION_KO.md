@@ -364,6 +364,68 @@ Dispatcher (`mlll_gram.c:803-813`)는 `widths_from_alg` 실패 시 조용히 ibz
 
 **잠정 상태**: Phase 2 "primary 확정"은 L1 부분 관찰 기반. L3/L5 는 사실상 미검증. Phase 3 착수 전 Phase 2.1 수행이 선행 조건.
 
+### 6.8. P2.1-dispatch: Threshold 정정 및 3-레벨 fp path 재검증 — 2026-04-22
+
+**조사 전제 검증**: 벤치 prime bitsize(§6.7 표)가 production prime과 다를 가능성을 agent 재조사로 검증. 결과 production `QUATALG_PINFTY.p` limb literal 직접 읽어 확인:
+
+- L1: `src/precomp/ref/lvl1/quaternion_data.c` — 4 limbs, top `0x4fffffffffffffff` → **251 bits** (spec BITS=256)
+- L3: `src/precomp/ref/lvl3/quaternion_data.c` — 6 limbs, top `0x40ffffffffffffff` → **383 bits** (spec BITS=384)
+- L5: `src/precomp/ref/lvl5/quaternion_data.c` — 8 limbs, top `0x1affffffffffffff` → **505 bits** (spec BITS=512)
+
+§6.7 벤치 수치(251/375/473)와 production(251/383/505)이 일치한다(L1) / 근접한다(L3/L5 오차 8~32 bits). 핵심 결함은 **모든 관측 prime 이 dispatcher 임계값 128/200/256 을 훨씬 상회** — 벤치/production 공통으로 **L1만 적중** (251 ≤ 256이므로 L5 widths 브랜치). L3/L5는 dispatcher `return 0` → silent ibz fallback. 휴리스틱 자체가 spec BITS 상수와 2배 차이 나는 버그.
+
+**수정안**: user 방침 "sqisign 도 동일한 휴리스틱이면 똑같이". Spec BITS 상수(256/384/512) 기준으로 임계값을 재지정, 두 곳 모두 수정:
+
+- `quat_fp_widths_from_alg` (`quat_fixed_precision.c:65-76`) — fp dispatcher (production).
+- `mlll_gram_level_hints` (`mlll_gram.c:113-122`) — prealloc hints (현재 dead path지만 일관성 위해 동시 정정).
+
+```c
+/* after */
+if      (p_bits <= 256) { /* L1: p ~251 bits */ ... }
+else if (p_bits <= 384) { /* L3: p ~383 bits */ ... }
+else if (p_bits <= 512) { /* L5: p ~505 bits */ ... }
+else                    { return 0; }
+```
+
+**SELFTEST 3-레벨 검증** (budget=1 force-trap, `--iterations=1 --mode=alg3 --fp`):
+
+| Level | stderr 출력 | 결과 |
+|---|---|---|
+| L1 | `quat_fp_vec overflow at load_gen0: 128 bits > 1 budget (nwords_vec=5)` | abort (core dumped) |
+| L3 | `quat_fp_vec overflow at load_gen0: 192 bits > 1 budget (nwords_vec=7)` | abort (core dumped) |
+| L5 | `quat_fp_vec overflow at load_gen0: 255 bits > 1 budget (nwords_vec=9)` | abort (core dumped) |
+
+`nwords_vec` 값 5/7/9 가 각각 L1/L3/L5 widths 테이블(§6.4-a)과 일치 → **모든 레벨에서 fp path 진입 + trap 발동 확인**.
+
+**Production 재측정** (SELFTEST 제거 후 실제 widths 기반 capacity sweep 재수행, `iter=500(alg2)/5000(alg3)`):
+
+| Level | Mode | vec_max | vec_budget | gram_max | gram_budget | Verdict |
+|---|---|---|---|---|---|---|
+| L1 | alg2 | 259 | 318 | 517 | 574 | PASS |
+| L1 | alg3 | 129 | 318 | 507 | 574 | PASS |
+| L3 | alg2 | 389 | 446 | 778 | 830 | PASS |
+| L3 | alg3 | 195 | 446 | 771 | 830 | PASS |
+| L5 | alg2 | 509 | 574 | 1019 | 1086 | PASS |
+| L5 | alg3 | 256 | 574 | 1015 | 1086 | PASS |
+
+**전 레벨/모드 PASS**. trap abort 0건. 최저 margin은 **L3 alg2 Gram (52 bits ≈ 0.8 limb)**. 로그: `bench_logs/p2_fp_capacity_verify/L{1,3,5}_alg{2,3}.log` (overwrite).
+
+**§6.7 무효화 스코프 재정의**:
+
+1. §5.6 3-way sweep 시간 표: L3/L5 "fp" 컬럼은 여전히 **pre-fix ibz fallback 수치**. **Phase 2.1 후속 time re-run 필요** (P2.1-time-rerun).
+2. §6.4 capacity sweep: 본 절 표로 **대체**. L1/L3/L5 모두 실제 fp path 실측 budget 감사 완료.
+3. §6.5 equivalence: L1 is ibz↔fp 실제 비교 유효. L3/L5는 pre-fix 상태에서 fp가 안 돌았으므로 사실상 ibz↔ibz 비교. **재실행 필요** (P2.1-equiv-rerun).
+4. §5.1 4-기준 평가: 기준 (1)(2)(3)(4) 모두 **L1/L3/L5 전체에서 fp 경로 실증 완료** (본 절 SELFTEST + capacity sweep). L1에서 L5 widths 오버사이징 이슈도 **해소** (L1 nwords_vec=5, nwords_gram=9 로 정상 축소).
+
+**후속 잔여**:
+
+- [x] **P2.1-dispatch** 임계값 256/384/512 로 정정.
+- [x] **P2.1-widths-rerun** 3-레벨 SELFTEST + 6-combo capacity sweep 통과.
+- [ ] **P2.1-time-rerun** §5.6 재측정 (alg2 500 iter, alg3 5000 iter × L1/L3/L5 × ibz/prealloc/fp).
+- [ ] **P2.1-equiv-rerun** `quat_test_mlll_gram_fp_equivalence` L1/L3/L5 강제 실행.
+
+**상태**: fp path가 드디어 3레벨 모두 돈다. Phase 2 근거의 상당 부분(capacity + 기준 평가)이 이 시점 이후로 **L3/L5 실측 기반**. 남은 time/equiv 재측정 완료 시점에 Phase 2 "primary 확정" 을 **3-레벨 전면 확정**으로 갱신 가능.
+
 ## 7. 열린 질문 / 검증 필요
 
 1. **Signed 표현** — **2026-04-21 해결 (§6.2 P2-C-types-c)**. Storage는 two's complement, multiplication만 내부적으로 sign-magnitude. Add/sub hot loop에서 분기 없음이 결정 근거.
