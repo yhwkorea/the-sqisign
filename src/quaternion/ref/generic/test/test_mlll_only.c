@@ -77,6 +77,12 @@ int main(void)
     printf("gram_fp_equivalence done (res=%d)\n", res);
     fflush(stdout);
 
+    printf("Starting MLLL test: alg4_mlll_gram_equivalence...\n");
+    fflush(stdout);
+    res |= quat_test_alg4_mlll_gram_equivalence();
+    printf("alg4_mlll_gram_equivalence done (res=%d)\n", res);
+    fflush(stdout);
+
     printf("Starting MLLL test: all_zero_generators...\n");
     fflush(stdout);
     res |= quat_test_mlll_all_zero_generators();

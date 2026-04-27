@@ -13,6 +13,9 @@ option(ENABLE_STRICT "Build with strict compile options." ON)
 option(ENABLE_TESTS  "Enable compilation of tests." ON)
 option(ENABLE_CT_TESTING  "Enable compilation for constant time testing." OFF)
 option(ENABLE_SIGN "Build with sign functionality" ON)
+option(SQISIGN_USE_MLLL_GRAM "Route quat_lideal_prime_norm_reduced_equivalent through the Gram-based MLLL (Compact paper Alg 4) instead of HNF." OFF)
+set(MLLL_FP_KIND "2" CACHE STRING "MLLL μ/B float backend: 0=double, 1=mpf_t, 2=mpfr_t (paper-strict default), 3=dpe_t")
+set(MLLL_FP_PREC "1024" CACHE STRING "MLLL μ/B float precision in bits (covers L5 paper bound ~1010b)")
 set(GMP_LIBRARY "SYSTEM" CACHE STRING "Which version of GMP to use: SYSTEM, BUILD or MINI")
 set(GF_RADIX "AUTO" CACHE STRING "Set the radix for the gf module (currently supported values: 32 or 64), or AUTO.")
 
@@ -39,6 +42,18 @@ if(ENABLE_SIGN)
 	include(.cmake/gmpconfig.cmake)
 	add_compile_definitions(ENABLE_SIGN)
 endif()
+
+if(SQISIGN_USE_MLLL_GRAM)
+	add_compile_definitions(SQISIGN_USE_MLLL_GRAM)
+endif()
+
+add_compile_definitions(MLLL_FP_KIND=${MLLL_FP_KIND} MLLL_FP_PREC=${MLLL_FP_PREC})
+if(MLLL_FP_KIND EQUAL 2)
+	find_library(MPFR_LIB NAMES mpfr REQUIRED)
+	message(STATUS "MLLL: using mpfr_t backend, linking ${MPFR_LIB}")
+	link_libraries(${MPFR_LIB})
+endif()
+message(STATUS "MLLL: MLLL_FP_KIND=${MLLL_FP_KIND} MLLL_FP_PREC=${MLLL_FP_PREC}")
 
 set(BM_BINS "" CACHE INTERNAL "List of benchmark binaries")
 
