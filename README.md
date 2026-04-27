@@ -1,5 +1,49 @@
 # SQIsign
 
+> **이 fork는 paper-strict MLLL fork입니다.**
+> Compact paper (Kim–Lee–Yoo, *"Compact Quaternion Algorithms for SQIsign"*) Algorithm 1 (MLLL)을
+> upstream의 HNF 기반 ideal 환원 경로 대신 **단독 기본 경로**로 사용합니다.
+
+## Paper-strict MLLL 상태 (이 fork 한정)
+
+| 항목 | 값 |
+|---|---|
+| 기본 부동소수 백엔드 | `D2c` (mpfr_t, correctly-rounded) |
+| 기본 정밀도 | `MLLL_FP_PREC=1024` bits (L5 paper bound 1010 b를 14 b 마진으로 커버) |
+| HNF post-processing fallback | **제거됨** (paper-external 코드 0 %) |
+| Algorithm 1 종료 조건 | `assert(nz_count <= 4)` 후 직접 rank-≤4 basis 추출 |
+
+### 검증 결과 (3 NIST 레벨 전부)
+
+| 검증 | L1 | L3 | L5 |
+|---|---|---|---|
+| `test_scheme` (랜덤 sign/verify) | ✅ 0.78 s | ✅ 1.51 s | ✅ 1.92 s |
+| `test_kat` (100 iter, MLLL self) | ✅ 50.34 s | ✅ 81.94 s | ✅ 112.21 s |
+| Lemma `mlll-bound` 정수 상한 | 506 b ≤ 514 b | 769 b ≤ 772 b | 1016 b = 1016 b |
+
+### KAT 파일 정책
+
+- `KAT/PQCsignKAT_*.rsp` — upstream HNF 기반 (회귀용 보존)
+- `KAT/PQCsignKAT_*.rsp.MLLL` — 이 fork (MLLL) 기반 KAT 100 iter
+
+> HNF KAT과 MLLL build의 byte-exact 일치는 **수학적으로 불가능** (서로 다른 환원 형태).
+> 페이퍼는 Algorithm 1 사용만 명시하며 byte-compat을 요구하지 않습니다.
+> 자세한 비교는 commit `5ef9b76` 메시지 + `src/quaternion/ref/generic/lll/PLAN_KO.md` 참고.
+
+### 빌드 옵션
+
+```bash
+# 기본 (paper-strict)
+cmake -DSQISIGN_BUILD_TYPE=ref ..
+
+# 백엔드/정밀도 조정 (실험용)
+cmake -DSQISIGN_BUILD_TYPE=ref -DMLLL_FP_KIND=2 -DMLLL_FP_PREC=1024 ..
+#   MLLL_FP_KIND: 0=double, 1=mpf_t, 2=mpfr_t (default), 3=dpe_t
+#   ⚠ KIND=0/3 (53 b mantissa)은 페이퍼 상한 (L1≥506b 등) 수학적 미달
+```
+
+---
+
 This library is a C implementation of SQIsign.
 
 ## Requirements
