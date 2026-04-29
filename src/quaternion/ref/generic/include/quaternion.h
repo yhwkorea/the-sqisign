@@ -594,6 +594,20 @@ void quat_lideal_reduce_basis(ibz_mat_4x4_t *reduced,
                               const quat_alg_t *alg); // replaces lideal_lll
 
 /**
+ * @brief MLLL_GRAM variant of quat_lideal_reduce_basis
+ *
+ * Same external contract as quat_lideal_reduce_basis (HNF + classic LLL),
+ * but the four columns of the stored basis are extracted as MLLL generators
+ * and reduced via quat_mlll_gram (Lemma 3 width, Gram-based MLLL). Used as
+ * a drop-in replacement for benchmarking and for SQIsign Alg 4 hot paths
+ * once Phase 3-2 routes the macro alias.
+ */
+void quat_lideal_reduce_basis_mlll_gram(ibz_mat_4x4_t *reduced,
+                                        ibz_mat_4x4_t *gram,
+                                        const quat_left_ideal_t *lideal,
+                                        const quat_alg_t *alg);
+
+/**
  * @brief Multplies two ideals and L2-reduces the lattice of the result
  *
  * Implements the L2 Algorithm of Nguyen-Stehlé, also known as fplll:
@@ -627,6 +641,19 @@ int quat_lideal_prime_norm_reduced_equivalent(quat_left_ideal_t *lideal,
                                               const quat_alg_t *alg,
                                               const int primality_num_iter,
                                               const int equiv_bound_coeff);
+
+/**
+ * @brief MLLL_GRAM variant of quat_lideal_prime_norm_reduced_equivalent
+ *
+ * Same external contract and returns as the HNF version, but uses
+ * quat_lideal_reduce_basis_mlll_gram internally. The random sampling loop
+ * and primality handshake are identical. Used as a drop-in replacement in
+ * keygen/sign Alg 4 hot paths when MLLL_GRAM backend is enabled.
+ */
+int quat_lideal_prime_norm_reduced_equivalent_mlll_gram(quat_left_ideal_t *lideal,
+                                                        const quat_alg_t *alg,
+                                                        const int primality_num_iter,
+                                                        const int equiv_bound_coeff);
 
 /** @}
  */
