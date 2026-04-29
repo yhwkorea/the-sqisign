@@ -1,46 +1,92 @@
-# SQIsign
+# SQIsign — Compact paper MLLL fork
 
-> **이 fork는 paper-strict MLLL fork입니다.**
-> Compact paper (Kim–Lee–Yoo, *"Compact Quaternion Algorithms for SQIsign"*) Algorithm 1 (MLLL)을
-> upstream의 HNF 기반 ideal 환원 경로 대신 **단독 기본 경로**로 사용합니다.
+> ⚠ **거짓 표현 정정 (2026-04-29)**: 이전 README는 "MLLL을 단독 기본 경로로 사용" 이라고
+> 적혀 있었으나 외부 감사로 **거짓**임이 발각. 실제로는 sign/keygen 핫 패스가 여전히 HNF만
+> 호출. 자세한 사고 기록은 `PRESENTATION_KO.md` 와 `CLAUDE.md` 참고.
 
-## Paper-strict MLLL 상태 (이 fork 한정)
+## 현재 작업 계획 (2026-04-29 갱신)
 
-| 항목 | 값 |
-|---|---|
-| 기본 부동소수 백엔드 | `D2c` (mpfr_t, correctly-rounded) |
-| 기본 정밀도 | `MLLL_FP_PREC=1024` bits (L5 paper bound 1010 b를 14 b 마진으로 커버) |
-| HNF post-processing fallback | **제거됨** (paper-external 코드 0 %) |
-| Algorithm 1 종료 조건 | `assert(nz_count <= 4)` 후 직접 rank-≤4 basis 추출 |
+**현 위치**: Phase 3-1 완료 → Phase 3-2 진입 직전.
 
-### 검증 결과 (3 NIST 레벨 전부)
+**다음 행동 (우선순위 순)**:
+1. ~~`quat_lideal_reduce_basis_mlll_gram` + `quat_lideal_prime_norm_reduced_equivalent_mlll_gram` **본체 작성**~~ → ✅ Phase 3-1 완료 (lll_applications.c +94/+98 라인, 단위 테스트 17/17 PASS)
+2. `SQISIGN_USE_MLLL_GRAM=ON` 시 매크로 alias 로 sign.c/keygen.c **무수정 라우팅** ← 다음 단계
+3. `apps/PQCgenKAT_sign.c` 에 MLLL 빌드 분기 → `.rsp.MLLL` 진짜 MLLL 출처화
+4. README + PLAN_KO.md + commit msg 시점 동기화
+5. (선택) Algorithm 1 IdealFiltration 변종
 
-| 검증 | L1 | L3 | L5 |
-|---|---|---|---|
-| `test_scheme` (랜덤 sign/verify) | ✅ 0.78 s | ✅ 1.51 s | ✅ 1.92 s |
-| `test_kat` (100 iter, MLLL self) | ✅ 50.34 s | ✅ 81.94 s | ✅ 112.21 s |
-| Lemma `mlll-bound` 정수 상한 | 506 b ≤ 514 b | 769 b ≤ 772 b | 1016 b = 1016 b |
+**Phase 3-2 완료 기준**: `grep -rn '_mlll_gram\b' src/signature/ src/id2iso/ src/sqisign.c` 가 1+건 출력 + `make test` 전 통과.
 
-### KAT 파일 정책
+## 현재 상태 — 완료 vs 미완료
 
-- `KAT/PQCsignKAT_*.rsp` — upstream HNF 기반 (회귀용 보존)
-- `KAT/PQCsignKAT_*.rsp.MLLL` — 이 fork (MLLL) 기반 KAT 100 iter
+| 항목 | 상태 | 검증 명령 |
+|---|---|---|
+| Algorithm 1/2/3 본체 작성 | ✅ | `wc -l src/quaternion/ref/generic/lll/mlll*.c` |
+| 4 부동소수 백엔드 (D2a–D2d) | ✅ | `cat src/quaternion/ref/generic/lll/mlll_fp_ops.h` |
+| 단위 테스트 17/17 PASS (Phase 3-1 추가 2개 포함) | ✅ | `./build_default/src/quaternion/ref/generic/test/sqisign_test_mlll` |
+| 4-way 동치성 (HNF/ibz/B/fp) | ✅ | `test_mlll_gram_fp_equivalence` |
+| Lemma `mlll-bound` 페이퍼 상한 만족 | ✅ | L1=506b ≤ 514b, L3=769b ≤ 772b, L5=1016b = 1016b |
+| 함수 본체 2개 (`reduce_basis_mlll_gram`, `prime_norm_reduced_equivalent_mlll_gram`) | ✅ | `grep -n 'quat_lideal_reduce_basis_mlll_gram\|quat_lideal_prime_norm_reduced_equivalent_mlll_gram' src/quaternion/ref/generic/lll/lll_applications.c` |
+| **`_mlll_gram` 핫 패스 호출** | **❌** | `grep -rn '_mlll_gram\b' src/signature/ ...` → 빈 |
+| **`SQISIGN_USE_MLLL_GRAM` 매크로 사용처** | **❌** | `grep -rn 'SQISIGN_USE_MLLL_GRAM' src/ --include='*.c'` → 빈 |
+| **KAT `.rsp.MLLL` 출처 = MLLL binary** | **❌** | `apps/PQCgenKAT_sign.c` 에 MLLL 분기 없음 (HNF binary가 생성) |
+| **Algorithm 1 IdealFiltration 변종** | **❌** | 함수 자체 없음, PLAN_KO.md 미구현 표기 |
+| **README/PLAN/commit msg 동기화** | 🟡 | Phase 3-1 commit 으로 부분 회복 중 |
 
-> HNF KAT과 MLLL build의 byte-exact 일치는 **수학적으로 불가능** (서로 다른 환원 형태).
-> 페이퍼는 Algorithm 1 사용만 명시하며 byte-compat을 요구하지 않습니다.
-> 자세한 비교는 commit `5ef9b76` 메시지 + `src/quaternion/ref/generic/lll/PLAN_KO.md` 참고.
+→ **알고리즘 컴포넌트 수준: 약 80% 완료** (Phase 3-1 함수 본체 추가)
+→ **빌드 통합 수준: 0% (sign이 MLLL을 한 번도 호출하지 않음 — Phase 3-2 영역)**
 
-### 빌드 옵션
+## 마지막 검증 시점
+
+- **2026-04-27 22:18 KST**:
+  - `build_default` (= `MLLL_FP_KIND=2 MLLL_FP_PREC=1024`, **`SQISIGN_USE_MLLL_GRAM=OFF`**)
+  - `sqisign_test_scheme_lvl{1,3,5}` PASS
+  - `sqisign_test_kat_lvl{1,3,5}` 100 iter PASS (50.34s / 81.94s / 112.21s)
+  - **이 측정값은 HNF 핫 패스 + MLLL 보조 호출의 합**. 순수 MLLL 핫 패스 측정은 Phase 3-2 완료 후에만 가능.
+- **2026-04-29 22:38 KST**: 외부 감사로 핫 패스 미통합 발견.
+- **2026-04-29 23:0x KST (Phase 3-1)**: `quat_lideal_reduce_basis_mlll_gram` + `quat_lideal_prime_norm_reduced_equivalent_mlll_gram` 본체 작성. `sqisign_test_mlll` 17/17 PASS (신규 2개 = `lideal_reduce_basis_gram_equivalence` 25 trials, `lideal_prime_norm_reduced_equivalent_gram` 5/5 trials). `sqisign_test_scheme_lvl1` PASS (HNF 경로, 회귀 없음).
+
+## 알려진 미통합/거짓 위험 항목
+
+1. **README ≠ 빌드 현실**: 이전 README가 "단독 기본 경로" 라고 주장했으나 실제로는 HNF 단독 (이 정정으로 부분 회복 중).
+2. **KAT 파일명 호도**: `PQCsignKAT_*.rsp.MLLL` 3개 파일은 **HNF binary 가 생성**한 것. Phase 3-3 완료 전엔 회귀 테스트로 부적절.
+3. **Lemma bound 측정값** 은 default 빌드 (USE_MLLL_GRAM=OFF) 의 **보조 호출** 에서 나온 값. 핫 패스 측정 아님.
+4. **commit `5ef9b76` ("paper-strict MLLL 마무리")** 와 **`d1073ee` ("README 최상단 paper-strict 섹션")** 의 표현은 알고리즘 한정 의미였음. 빌드 통합 의미가 아님.
+
+## Compact paper 매핑 (간단 요약)
+
+| 페이퍼 | 구현 위치 | 상태 |
+|---|---|---|
+| Algorithm 1 (MLLL 본체) | `src/quaternion/ref/generic/lll/mlll.c:170` | ✅ 27 라인 1:1 매핑 |
+| Algorithm 2 (lattice mul) | `mlll.c:399` `quat_lattice_mul_mlll` | ✅ |
+| Algorithm 3 (lideal create) | `mlll.c:451` `quat_lattice_add_mlll`, `mlll_gram.c:880` | ✅ |
+| Algorithm 4 (Compact ideal mul) | `mlll.c:435` (16-generator → MLLL) | ✅ wrapper |
+| Lemma `mlll-bound` (정수 상한) | 측정값 ≤ 페이퍼 상한 | ✅ 3 레벨 |
+| Appendix A.1 (μ/B real) | mpfr_t PREC=1024 | ✅ |
+| **IdealFiltration 변종 (Alg 1 wrapper)** | — | **❌** |
+| **sign/keygen 핫 패스 통합** | — | **❌** |
+
+## 빌드 옵션
 
 ```bash
-# 기본 (paper-strict)
+# 현재 default (HNF 핫 패스 + MLLL 보조 호출만)
 cmake -DSQISIGN_BUILD_TYPE=ref ..
 
-# 백엔드/정밀도 조정 (실험용)
-cmake -DSQISIGN_BUILD_TYPE=ref -DMLLL_FP_KIND=2 -DMLLL_FP_PREC=1024 ..
+# Phase 3-2 완료 전엔 의미 없음 (분기 0건)
+cmake -DSQISIGN_BUILD_TYPE=ref -DSQISIGN_USE_MLLL_GRAM=ON ..
+
+# MLLL 백엔드/정밀도 (실험용 — 단위 테스트에서만 작동)
+cmake -DMLLL_FP_KIND=2 -DMLLL_FP_PREC=1024 ..
 #   MLLL_FP_KIND: 0=double, 1=mpf_t, 2=mpfr_t (default), 3=dpe_t
-#   ⚠ KIND=0/3 (53 b mantissa)은 페이퍼 상한 (L1≥506b 등) 수학적 미달
+#   ⚠ KIND=0/3 (53 b mantissa)은 페이퍼 상한 (L1=506b 등) 수학적 미달
 ```
+
+## 자세한 보고서
+
+- `PRESENTATION_KO.md` — 사전 지식 0 사람 위한 11-Part 전체판 (735 줄)
+- `src/quaternion/ref/generic/lll/PLAN_KO.md` — phase별 작업 계획 (시점 갱신 필요)
+- `src/quaternion/ref/generic/lll/AUDIT_2026-04-19_KO.md` — 4월 19일 감사
+- `CLAUDE.md` — 이 저장소 작업 시 Claude 세션 규칙
 
 ---
 
