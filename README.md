@@ -6,16 +6,16 @@
 
 ## 현재 작업 계획 (2026-04-29 갱신)
 
-**현 위치**: Phase 3 진입 — sign/keygen 핫 패스에 MLLL 라우팅 미수행 상태 발견.
+**현 위치**: Phase 3-1 완료 → Phase 3-2 진입 직전.
 
 **다음 행동 (우선순위 순)**:
-1. `quat_lideal_reduce_basis_mlll_gram` + `quat_lideal_prime_norm_reduced_equivalent_mlll_gram` **본체 작성** (헤더만 있음)
-2. `SQISIGN_USE_MLLL_GRAM=ON` 시 매크로 alias 로 sign.c/keygen.c **무수정 라우팅**
+1. ~~`quat_lideal_reduce_basis_mlll_gram` + `quat_lideal_prime_norm_reduced_equivalent_mlll_gram` **본체 작성**~~ → ✅ Phase 3-1 완료 (lll_applications.c +94/+98 라인, 단위 테스트 17/17 PASS)
+2. `SQISIGN_USE_MLLL_GRAM=ON` 시 매크로 alias 로 sign.c/keygen.c **무수정 라우팅** ← 다음 단계
 3. `apps/PQCgenKAT_sign.c` 에 MLLL 빌드 분기 → `.rsp.MLLL` 진짜 MLLL 출처화
 4. README + PLAN_KO.md + commit msg 시점 동기화
 5. (선택) Algorithm 1 IdealFiltration 변종
 
-**완료 기준**: `grep -rn '_mlll_gram\b' src/signature/ src/id2iso/ src/sqisign.c` 가 1+건 출력 + `make test` 전 통과.
+**Phase 3-2 완료 기준**: `grep -rn '_mlll_gram\b' src/signature/ src/id2iso/ src/sqisign.c` 가 1+건 출력 + `make test` 전 통과.
 
 ## 현재 상태 — 완료 vs 미완료
 
@@ -23,18 +23,18 @@
 |---|---|---|
 | Algorithm 1/2/3 본체 작성 | ✅ | `wc -l src/quaternion/ref/generic/lll/mlll*.c` |
 | 4 부동소수 백엔드 (D2a–D2d) | ✅ | `cat src/quaternion/ref/generic/lll/mlll_fp_ops.h` |
-| 단위 테스트 12/12 PASS | ✅ | `cd build_default && ctest -R mlll` |
+| 단위 테스트 17/17 PASS (Phase 3-1 추가 2개 포함) | ✅ | `./build_default/src/quaternion/ref/generic/test/sqisign_test_mlll` |
 | 4-way 동치성 (HNF/ibz/B/fp) | ✅ | `test_mlll_gram_fp_equivalence` |
 | Lemma `mlll-bound` 페이퍼 상한 만족 | ✅ | L1=506b ≤ 514b, L3=769b ≤ 772b, L5=1016b = 1016b |
+| 함수 본체 2개 (`reduce_basis_mlll_gram`, `prime_norm_reduced_equivalent_mlll_gram`) | ✅ | `grep -n 'quat_lideal_reduce_basis_mlll_gram\|quat_lideal_prime_norm_reduced_equivalent_mlll_gram' src/quaternion/ref/generic/lll/lll_applications.c` |
 | **`_mlll_gram` 핫 패스 호출** | **❌** | `grep -rn '_mlll_gram\b' src/signature/ ...` → 빈 |
-| **함수 본체 2개 (`reduce_basis_mlll_gram`, `prime_norm_reduced_equivalent_mlll_gram`)** | **❌** | `grep -rn '<함수>' src/ --include='*.c'` → 헤더만 |
 | **`SQISIGN_USE_MLLL_GRAM` 매크로 사용처** | **❌** | `grep -rn 'SQISIGN_USE_MLLL_GRAM' src/ --include='*.c'` → 빈 |
 | **KAT `.rsp.MLLL` 출처 = MLLL binary** | **❌** | `apps/PQCgenKAT_sign.c` 에 MLLL 분기 없음 (HNF binary가 생성) |
 | **Algorithm 1 IdealFiltration 변종** | **❌** | 함수 자체 없음, PLAN_KO.md 미구현 표기 |
-| **README/PLAN/commit msg 동기화** | **❌** | 이 정정 commit으로 부분 회복 중 |
+| **README/PLAN/commit msg 동기화** | 🟡 | Phase 3-1 commit 으로 부분 회복 중 |
 
-→ **알고리즘 컴포넌트 수준: 약 70% 완료**
-→ **빌드 통합 수준: 0% (sign이 MLLL을 한 번도 호출하지 않음)**
+→ **알고리즘 컴포넌트 수준: 약 80% 완료** (Phase 3-1 함수 본체 추가)
+→ **빌드 통합 수준: 0% (sign이 MLLL을 한 번도 호출하지 않음 — Phase 3-2 영역)**
 
 ## 마지막 검증 시점
 
@@ -44,6 +44,7 @@
   - `sqisign_test_kat_lvl{1,3,5}` 100 iter PASS (50.34s / 81.94s / 112.21s)
   - **이 측정값은 HNF 핫 패스 + MLLL 보조 호출의 합**. 순수 MLLL 핫 패스 측정은 Phase 3-2 완료 후에만 가능.
 - **2026-04-29 22:38 KST**: 외부 감사로 핫 패스 미통합 발견.
+- **2026-04-29 23:0x KST (Phase 3-1)**: `quat_lideal_reduce_basis_mlll_gram` + `quat_lideal_prime_norm_reduced_equivalent_mlll_gram` 본체 작성. `sqisign_test_mlll` 17/17 PASS (신규 2개 = `lideal_reduce_basis_gram_equivalence` 25 trials, `lideal_prime_norm_reduced_equivalent_gram` 5/5 trials). `sqisign_test_scheme_lvl1` PASS (HNF 경로, 회귀 없음).
 
 ## 알려진 미통합/거짓 위험 항목
 

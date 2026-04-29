@@ -53,6 +53,18 @@ int main(void)
     printf("lideal_create_gram_equivalence done (res=%d)\n", res);
     fflush(stdout);
 
+    printf("Starting MLLL test: lideal_reduce_basis_gram_equivalence...\n");
+    fflush(stdout);
+    res |= quat_test_lideal_reduce_basis_gram_equivalence();
+    printf("lideal_reduce_basis_gram_equivalence done (res=%d)\n", res);
+    fflush(stdout);
+
+    printf("Starting MLLL test: lideal_prime_norm_reduced_equivalent_gram...\n");
+    fflush(stdout);
+    res |= quat_test_lideal_prime_norm_reduced_equivalent_gram();
+    printf("lideal_prime_norm_reduced_equivalent_gram done (res=%d)\n", res);
+    fflush(stdout);
+
     printf("Starting MLLL test: gram_prealloc_equivalence...\n");
     fflush(stdout);
     res |= quat_test_mlll_gram_prealloc_equivalence();
@@ -77,11 +89,11 @@ int main(void)
     printf("gram_fp_equivalence done (res=%d)\n", res);
     fflush(stdout);
 
-    printf("Starting MLLL test: alg4_mlll_gram_equivalence...\n");
-    fflush(stdout);
-    res |= quat_test_alg4_mlll_gram_equivalence();
-    printf("alg4_mlll_gram_equivalence done (res=%d)\n", res);
-    fflush(stdout);
+    /* NOTE (Phase 3-1): quat_test_alg4_mlll_gram_equivalence was referenced
+     * here but never defined anywhere in the codebase. Linking failed for
+     * sqisign_test_mlll on HEAD before this commit. Removed the call to
+     * unblock the test binary; the equivalent coverage is provided by
+     * quat_test_compact_ideal_multiplication (Alg 4 wrapper) above. */
 
     printf("Starting MLLL test: all_zero_generators...\n");
     fflush(stdout);
