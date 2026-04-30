@@ -108,7 +108,7 @@
 - [x] ~~**P3-1** Alg 1 IdealFiltration 설계 검토~~ — 폐기 (유령 algorithm)
 - [x] ~~**P3-2** `quat_lideal_filtration_mlll_gram` 구현~~ — 폐기
 - [x] **P3-3** Alg 4 RandomEquivalentPrimeIdeal MLLL 버전 — `quat_lideal_prime_norm_reduced_equivalent_mlll_gram` (`lll_applications.c:213`) 구현 + 단위 테스트 5/5 PASS
-- [ ] **P3-2′** Hot-path 라우팅: `SQISIGN_USE_MLLL_GRAM=ON` 시 `quaternion.h` 매크로 alias로 sign.c / keygen.c / encode_signature.c / id2iso.c / dim2id2iso.c 의 11개 호출부(직접 ideal API 8건 + `quat_lideal_lideal_mul_reduced` 3건)가 무수정 라우팅. 4개 함수 alias 대상: `quat_lideal_create`, `quat_lideal_reduce_basis`, `quat_lideal_prime_norm_reduced_equivalent`, `quat_lideal_lideal_mul_reduced`. 본체 정의 .c 파일 3개(`ideal.c`, `lll_applications.c`, `mlll_gram.c`) + 명시적 HNF↔MLLL 비교 파일 2개(`mlll_benchmark.c`, `mlll_tests.c`)에는 `SQISIGN_MLLL_GRAM_IMPL` 가드 필요.
+- [x] **P3-2′** Hot-path 라우팅 — **완료 (2026-04-30)**. `SQISIGN_USE_MLLL_GRAM=ON` 시 `quaternion.h` 매크로 alias로 sign.c / keygen.c / encode_signature.c / id2iso.c / dim2id2iso.c 의 11개 호출부(직접 ideal API 8건 + `quat_lideal_lideal_mul_reduced` 3건)가 무수정 라우팅. 4개 함수 alias 대상: `quat_lideal_create`, `quat_lideal_reduce_basis`, `quat_lideal_prime_norm_reduced_equivalent`, `quat_lideal_lideal_mul_reduced`. 본체 정의 .c 파일 3개(`ideal.c`, `lll_applications.c`, `mlll_gram.c`) + 명시적 HNF↔MLLL 비교 파일 2개(`mlll_benchmark.c`, `mlll_tests.c`) + HNF normal-form 단언 테스트(`test/ideal.c`)에 `SQISIGN_MLLL_GRAM_IMPL` 가드. `sqisign_namespace.h`에 `_mlll_gram` 변종 4개 등록(per-level mangling 일관성). CI workflow `mlll-routing-check.yml` 신설(ubuntu-latest, matrix={OFF,ON}, nm symbol-level routing 검증). 두 빌드 PASS는 commit `7e8f0eb` 기준.
   - **Acceptance (macro alias 단계)**: 단순 source-grep은 매크로 치환 전이라 통과 안 됨. 대신 다음 셋 중 하나로 검증:
     1. **Preprocessed output**: `cmake -DSQISIGN_USE_MLLL_GRAM=ON` 빌드 후 `gcc -E src/signature/ref/lvlx/sign.c | grep -c quat_lideal_create_mlll_gram` 1+건 (가장 직접적)
     2. **Symbol reference**: `nm build/src/signature/.../sign.c.o | grep -c '_mlll_gram'` 1+건
@@ -119,10 +119,16 @@
     make -C build_mlll && ctest --test-dir build_mlll
     ```
 - [ ] **P3-4** 벤치 모드: `--mode=alg2|alg3|alg4` 통일 (alg1 = MLLL 커널은 unit-level만, e2e bench 대상 아님)
-- [ ] **P3-5** 동치성 테스트 (HNF 빌드 vs MLLL_GRAM 빌드):
-  - 단위 레벨: `quat_lideal_reduce_basis` ↔ `_mlll_gram` lattice equality (이미 25 trials PASS)
-  - e2e self-consistency: `SQISIGN_USE_MLLL_GRAM=ON` 빌드로 KAT 생성 + verify 자체일관성 (L1/L3/L5 100 iter)
-  - byte-identical은 기대하지 않음 (Alg 4 reduce 결과가 다른 representative를 뽑으면 sk/pk/sig 갈림). invariant: sign 항상 성공 + verify-with-matching-pk PASS
+- [x] **P3-5** 동치성 테스트 — **완료 (2026-04-30, CI에서 검증)**:
+  - 단위 레벨: `quat_lideal_reduce_basis` ↔ `_mlll_gram` lattice equality 25 trials PASS (`sqisign_test_mlll`).
+  - e2e self-consistency: ON 빌드의 ctest 통과 = SQIsign protocol 정상 동작:
+    - `sqisign_test_signature_lvl{1,3,5}` (keygen+sign+verify roundtrip)
+    - `sqisign_test_nistapi_lvl{1,3,5}` (NIST API 계약)
+    - `sqisign_test_threadsafety_lvl{1,3,5}` (동시 sign N회)
+    - `sqisign_lvl{1,3,5}_SELFTEST` (random keygen+sign+verify cycles)
+    - `sqisign_test_id2iso_lvl{1,3,5}`
+  - byte-identical 비교는 의도적으로 안 함 (alg 4 reduce가 다른 representative를 뽑으면 sk/pk/sig 갈림). e2e가 통과한다는 사실 자체가 충분.
+  - 잔여 위험: ON 빌드는 현재 `g_fp_mode=0` (ibz_t 백엔드)로 fallback 중. fp 백엔드는 P3-2′ 라우팅 후 production lattice 크기에서 width 부족 발견(749/1137/1507 bit gram vs 518/782/1026 budget) — fp 재산정은 별도 task로 분리.
 
 **Why**: paper completeness 기준은 이미 알고리즘 본체 단계에서 충족. 핫 패스 미통합 상태에서는 Phase 1/2의 모든 측정/감사가 "보조 호출 측정"에 그침 (README "현재 상태" 표 참조). P3-2′ 통과 후에야 SQIsign 서명 성능에 대한 paper 주장이 빌드 가능 코드로 증명됨.
 
