@@ -79,18 +79,13 @@ quat_mlll_gram_get_prealloc_mode(void)
  * contribution target (heap-free + Lemma 3 audit), and was never a
  * dismissal criterion. See FIXED_PRECISION_DECISION_KO.md §5.1.
  *
- * 2026-04-30: when SQISIGN_USE_MLLL_GRAM is on (hot-path routing active),
- * actual sign/keygen lattice sizes exceed the fp budget. Production
- * lattices were measured at 1.4-1.5x the random-test corpus that sized
- * the widths (e.g., L1 gram seen at 749 bits vs 518 bit budget). Under
- * hot-path routing default to ibz_t (mode=0); tests and benches that
- * want fp can opt-in via quat_mlll_gram_set_fp_mode(1). Re-sizing the
- * fp widths for production lattices is deferred to Phase 4. */
-#ifdef SQISIGN_USE_MLLL_GRAM
-static int g_fp_mode = 0;
-#else
+ * 2026-04-30: under SQISIGN_USE_MLLL_GRAM hot-path routing, production
+ * lattices were observed exceeding Phase 1 widths (gram up to
+ * 749/1137/1507 bits at L1/L3/L5). Initially fell back to ibz_t; widths
+ * have since been doubled in quat_fixed_precision.h to cover input
+ * generators (which are products and ~2x the random-corpus internal
+ * vec size). fp_mode=1 default restored. */
 static int g_fp_mode = 1;
-#endif
 
 void
 quat_mlll_gram_set_fp_mode(int mode)
