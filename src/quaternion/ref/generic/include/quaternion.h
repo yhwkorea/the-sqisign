@@ -775,6 +775,15 @@ int quat_sampling_random_ideal_O0_given_norm(quat_left_ideal_t *lideal,
  * names visible.
  * --------------------------------------------------------------------------- */
 #if defined(SQISIGN_USE_MLLL_GRAM) && !defined(SQISIGN_MLLL_GRAM_IMPL)
+/* sqisign_namespace.h has already mapped the HNF identifiers to per-level
+ * mangled names. Undef first so our alias overrides cleanly without
+ * triggering -Werror=redefined. The MLLL_GRAM target names (right-hand side)
+ * are themselves entered in sqisign_namespace.h, so cpp re-scan applies the
+ * per-level mangling to the redirected name. */
+#undef quat_lideal_create
+#undef quat_lideal_reduce_basis
+#undef quat_lideal_prime_norm_reduced_equivalent
+#undef quat_lideal_lideal_mul_reduced
 #define quat_lideal_create                        quat_lideal_create_mlll_gram
 #define quat_lideal_reduce_basis                  quat_lideal_reduce_basis_mlll_gram
 #define quat_lideal_prime_norm_reduced_equivalent quat_lideal_prime_norm_reduced_equivalent_mlll_gram
