@@ -296,7 +296,7 @@ quat_mlll_gram_ibz(ibz_mat_4x4_t *basis,
         int done = 0;
         int size_iter = 0;
         while (!done) {
-            if (++size_iter >= 64) {
+            if (++size_iter >= 4096) {
                 fprintf(stderr, "mlll_gram: size-reduce iteration cap exceeded\n");
                 abort();
             }
@@ -656,7 +656,7 @@ quat_mlll_gram_fp(ibz_mat_4x4_t *basis,
         int done = 0;
         int size_iter = 0;
         while (!done) {
-            if (++size_iter >= 64) {
+            if (++size_iter >= 4096) {
                 fprintf(stderr,
                     "mlll_gram_fp: size-reduce iteration cap exceeded\n");
                 abort();

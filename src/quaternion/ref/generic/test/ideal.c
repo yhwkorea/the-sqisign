@@ -1,3 +1,8 @@
+/* Ideal API tests assert specific HNF normal form layouts (e.g.
+ * lideal_create_from_primitive checks exact basis matrix entries).
+ * Bypass the SQISIGN_USE_MLLL_GRAM macro alias so this file always
+ * exercises the HNF path even under hot-path routing builds. */
+#define SQISIGN_MLLL_GRAM_IMPL
 #include "quaternion_tests.h"
 
 // void quat_lideal_norm(quat_left_ideal_t *lideal);
