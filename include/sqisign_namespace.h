@@ -606,6 +606,7 @@
 #undef quat_lideal_conjugate_without_hnf
 #undef quat_lideal_copy
 #undef quat_lideal_create
+#undef quat_lideal_create_mlll_gram
 #undef quat_lideal_create_principal
 #undef quat_lideal_equals
 #undef quat_lideal_generator
@@ -623,6 +624,7 @@
 #define quat_lideal_conjugate_without_hnf               SQISIGN_NAMESPACE_GENERIC(quat_lideal_conjugate_without_hnf)
 #define quat_lideal_copy                                SQISIGN_NAMESPACE_GENERIC(quat_lideal_copy)
 #define quat_lideal_create                              SQISIGN_NAMESPACE_GENERIC(quat_lideal_create)
+#define quat_lideal_create_mlll_gram                    SQISIGN_NAMESPACE_GENERIC(quat_lideal_create_mlll_gram)
 #define quat_lideal_create_principal                    SQISIGN_NAMESPACE_GENERIC(quat_lideal_create_principal)
 #define quat_lideal_equals                              SQISIGN_NAMESPACE_GENERIC(quat_lideal_equals)
 #define quat_lideal_generator                           SQISIGN_NAMESPACE_GENERIC(quat_lideal_generator)
@@ -800,12 +802,18 @@
 
 // Namespacing symbols exported from lll_applications.c:
 #undef quat_lideal_lideal_mul_reduced
+#undef quat_lideal_lideal_mul_reduced_mlll_gram
 #undef quat_lideal_prime_norm_reduced_equivalent
+#undef quat_lideal_prime_norm_reduced_equivalent_mlll_gram
 #undef quat_lideal_reduce_basis
+#undef quat_lideal_reduce_basis_mlll_gram
 
-#define quat_lideal_lideal_mul_reduced                  SQISIGN_NAMESPACE_GENERIC(quat_lideal_lideal_mul_reduced)
-#define quat_lideal_prime_norm_reduced_equivalent       SQISIGN_NAMESPACE_GENERIC(quat_lideal_prime_norm_reduced_equivalent)
-#define quat_lideal_reduce_basis                        SQISIGN_NAMESPACE_GENERIC(quat_lideal_reduce_basis)
+#define quat_lideal_lideal_mul_reduced                            SQISIGN_NAMESPACE_GENERIC(quat_lideal_lideal_mul_reduced)
+#define quat_lideal_lideal_mul_reduced_mlll_gram                  SQISIGN_NAMESPACE_GENERIC(quat_lideal_lideal_mul_reduced_mlll_gram)
+#define quat_lideal_prime_norm_reduced_equivalent                 SQISIGN_NAMESPACE_GENERIC(quat_lideal_prime_norm_reduced_equivalent)
+#define quat_lideal_prime_norm_reduced_equivalent_mlll_gram       SQISIGN_NAMESPACE_GENERIC(quat_lideal_prime_norm_reduced_equivalent_mlll_gram)
+#define quat_lideal_reduce_basis                                  SQISIGN_NAMESPACE_GENERIC(quat_lideal_reduce_basis)
+#define quat_lideal_reduce_basis_mlll_gram                        SQISIGN_NAMESPACE_GENERIC(quat_lideal_reduce_basis_mlll_gram)
 
 // Namespacing symbols exported from lll_verification.c:
 #undef ibq_vec_4_copy_ibz
