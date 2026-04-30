@@ -77,8 +77,20 @@ quat_mlll_gram_get_prealloc_mode(void)
  * Flipped to 1 after re-reading Phase 2 criteria — time regression
  * (L1 alg2 ~5.25x) is explicitly acceptable per the paper's
  * contribution target (heap-free + Lemma 3 audit), and was never a
- * dismissal criterion. See FIXED_PRECISION_DECISION_KO.md §5.1. */
+ * dismissal criterion. See FIXED_PRECISION_DECISION_KO.md §5.1.
+ *
+ * 2026-04-30: when SQISIGN_USE_MLLL_GRAM is on (hot-path routing active),
+ * actual sign/keygen lattice sizes exceed the fp budget. Production
+ * lattices were measured at 1.4-1.5x the random-test corpus that sized
+ * the widths (e.g., L1 gram seen at 749 bits vs 518 bit budget). Under
+ * hot-path routing default to ibz_t (mode=0); tests and benches that
+ * want fp can opt-in via quat_mlll_gram_set_fp_mode(1). Re-sizing the
+ * fp widths for production lattices is deferred to Phase 4. */
+#ifdef SQISIGN_USE_MLLL_GRAM
+static int g_fp_mode = 0;
+#else
 static int g_fp_mode = 1;
+#endif
 
 void
 quat_mlll_gram_set_fp_mode(int mode)
