@@ -74,16 +74,19 @@
  * tmp_L5 grows 27→52 limbs ≈ +200 bytes per MLLL slot.
  */
 
-/* vec coord. */
-#define NWORDS_QUAT_VEC_L1    11  /* 704 bits  (was 5/320) */
-#define NWORDS_QUAT_VEC_L3    16  /* 1024 bits (was 7/448) */
-#define NWORDS_QUAT_VEC_L5    20  /* 1280 bits (was 9/576) */
+/* vec coord. Sized to cover observed input-generator bitsize (>=704 at L1
+ * before any reduction) plus generous margin for tail cases. */
+#define NWORDS_QUAT_VEC_L1    24  /* 1536 bits */
+#define NWORDS_QUAT_VEC_L3    32  /* 2048 bits */
+#define NWORDS_QUAT_VEC_L5    40  /* 2560 bits */
 #define NWORDS_QUAT_VEC_MAX   NWORDS_QUAT_VEC_L5
 
-/* Gram entry. */
-#define NWORDS_QUAT_GRAM_L1   17  /* 1088 bits (was 9/576;  prod saw 749) */
-#define NWORDS_QUAT_GRAM_L3   25  /* 1600 bits (was 13/832; prod saw 1137) */
-#define NWORDS_QUAT_GRAM_L5   33  /* 2112 bits (was 17/1088; prod saw 1507) */
+/* Gram entry. Must fit dot product 2*max(vec)+2 bits. Production observation
+ * (2026-04-30 second iteration): gram up to 1275/1921/2555 bits at L1/L3/L5.
+ * Sized to ~2x vec budget with ~20% margin. */
+#define NWORDS_QUAT_GRAM_L1   48  /* 3072 bits */
+#define NWORDS_QUAT_GRAM_L3   64  /* 4096 bits */
+#define NWORDS_QUAT_GRAM_L5   80  /* 5120 bits */
 #define NWORDS_QUAT_GRAM_MAX  NWORDS_QUAT_GRAM_L5
 
 /* tmp = X * G[i][j] (vec limbs + Gram limbs + carry). */
