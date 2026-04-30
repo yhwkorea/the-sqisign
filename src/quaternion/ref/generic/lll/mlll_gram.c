@@ -79,13 +79,31 @@ quat_mlll_gram_get_prealloc_mode(void)
  * contribution target (heap-free + Lemma 3 audit), and was never a
  * dismissal criterion. See FIXED_PRECISION_DECISION_KO.md §5.1.
  *
- * 2026-04-30: under SQISIGN_USE_MLLL_GRAM hot-path routing, production
- * lattices were observed exceeding Phase 1 widths (gram up to
- * 749/1137/1507 bits at L1/L3/L5). Initially fell back to ibz_t; widths
- * have since been doubled in quat_fixed_precision.h to cover input
- * generators (which are products and ~2x the random-corpus internal
- * vec size). fp_mode=1 default restored. */
+ * 2026-04-30: hot-path routing (SQISIGN_USE_MLLL_GRAM) revealed production
+ * inputs vastly exceeding Phase 1 random-corpus measurements:
+ *   - First observation: gram 749/1137/1507b at L1/L3/L5 (vs 518/782/1026 budget)
+ *   - After widening vec 11/16/20, gram 17/25/33: gram seen at 1275/1921/2555b
+ *   - After widening vec 24/32/40, gram 48/64/80: vec input STILL exceeds 1536b
+ *
+ * The pattern: sign/keygen call chains accumulate multiplications across
+ * lattice_mul -> reduce -> lideal_create -> ... before MLLL is reached, so
+ * input-generator size depends on protocol-level state, not just Phase 1's
+ * MLLL-internal bound. Bounding it requires SQIsign protocol analysis, not
+ * just MLLL bit-size analysis. Phase 1's bounds remain correct for what
+ * they measured (post-LLL settled state) — they just don't apply to
+ * pre-MLLL inputs in production hot path.
+ *
+ * Pragmatic resolution: under hot-path routing, fall back to ibz_t (mode=0)
+ * which has unbounded magnitude. fp can still be re-enabled via set_fp_mode(1)
+ * for unit tests / benchmarks where input bounds are controlled. The wider
+ * widths in quat_fixed_precision.h are kept (no harm; small stack overhead)
+ * and would help if a future Phase 4 sizes them properly from protocol
+ * analysis. */
+#ifdef SQISIGN_USE_MLLL_GRAM
+static int g_fp_mode = 0;
+#else
 static int g_fp_mode = 1;
+#endif
 
 void
 quat_mlll_gram_set_fp_mode(int mode)
