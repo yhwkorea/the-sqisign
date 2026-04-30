@@ -1,3 +1,4 @@
+#define SQISIGN_MLLL_GRAM_IMPL
 #include <quaternion.h>
 #include <internal.h>
 #include "lll_internals.h"
@@ -111,6 +112,34 @@ quat_lideal_lideal_mul_reduced(quat_left_ideal_t *prod,
     prod->parent_order = lideal1->parent_order;
     quat_lideal_norm(prod);
     quat_lideal_reduce_basis(&red, gram, prod, alg);
+    ibz_mat_4x4_copy(&(prod->lattice.basis), &red);
+
+    ibz_mat_4x4_finalize(&red);
+}
+
+/* ---------------------------------------------------------------------------
+ * MLLL_GRAM variant of quat_lideal_lideal_mul_reduced
+ *
+ * Same external contract. Internal lattice multiplication uses
+ * `quat_lattice_mul_mlll_gram` (16-generator MLLL on Lemma 3 width) and the
+ * post-mul reduction uses `quat_lideal_reduce_basis_mlll_gram`. Drop-in
+ * replacement for the HNF version in id2iso hot paths under
+ * SQISIGN_USE_MLLL_GRAM macro routing.
+ * --------------------------------------------------------------------------- */
+void
+quat_lideal_lideal_mul_reduced_mlll_gram(quat_left_ideal_t *prod,
+                                         ibz_mat_4x4_t *gram,
+                                         const quat_left_ideal_t *lideal1,
+                                         const quat_left_ideal_t *lideal2,
+                                         const quat_alg_t *alg)
+{
+    ibz_mat_4x4_t red;
+    ibz_mat_4x4_init(&red);
+
+    quat_lattice_mul_mlll_gram(&(prod->lattice), &(lideal1->lattice), &(lideal2->lattice), alg);
+    prod->parent_order = lideal1->parent_order;
+    quat_lideal_norm(prod);
+    quat_lideal_reduce_basis_mlll_gram(&red, gram, prod, alg);
     ibz_mat_4x4_copy(&(prod->lattice.basis), &red);
 
     ibz_mat_4x4_finalize(&red);

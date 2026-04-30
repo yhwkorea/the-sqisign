@@ -13,6 +13,7 @@
  *   "Compact Quaternion Algorithms for SQIsign" paper.
  */
 
+#define SQISIGN_MLLL_GRAM_IMPL
 #include <quaternion.h>
 #include <stdio.h>
 #include <assert.h>

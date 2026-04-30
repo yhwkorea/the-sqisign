@@ -110,10 +110,10 @@ git log --oneline apps/PQCgenKAT_sign.c
 | Phase 1 | 알고리즘 본체 작성 | `mlll_tests.c` 단위 테스트 PASS |
 | Phase 2 | 백엔드/정밀도/dispatcher | 4-way 동치 + Lemma bound 측정 |
 | Phase 3-1 | 누락 함수 본체 작성 | `grep -rn '함수\\b' src/ --include='*.c'` 본체 1+건 |
-| Phase 3-2 | 핫 패스 라우팅 | `grep -rn '_mlll_gram\\b' src/signature/` 1+건 |
+| Phase 3-2 | 핫 패스 라우팅 | 매크로 alias 채택 시 source-grep 부적절. 대신: `gcc -E sign.c \| grep -c _mlll_gram` 1+건 OR 컴파일된 .o의 `nm \| grep _mlll_gram` 1+건 OR ON+OFF 두 빌드 `make test` 양쪽 PASS |
 | Phase 3-3 | KAT 생성 binary | `apps/PQCgenKAT_sign.c` 에 USE_MLLL_GRAM 분기 |
 | Phase 3-4 | 문서 동기화 | README ↔ PLAN ↔ 빌드 일치 |
-| Phase 3-5 | Algorithm 1 변종 | (선택) |
+| Phase 3-5 | ~~Algorithm 1 변종~~ → HNF↔MLLL_GRAM e2e 동치성 | **2026-04-30 정정**: 원본의 "Algorithm 1 변종"은 논문에 없는 유령 algorithm. 실제 P3-5 acceptance는 두 빌드의 self-consistency. PLAN_KO.md 상단 정정 참조 |
 
 다른 phase는 끝났는데 다음 phase 미시작 상태면 **README 의 phase 명시 + 정직 표기 의무**.
 

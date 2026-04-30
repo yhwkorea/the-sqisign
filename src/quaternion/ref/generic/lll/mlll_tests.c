@@ -8,6 +8,7 @@
  * 3. Bit size bound: track max integer size during execution
  */
 
+#define SQISIGN_MLLL_GRAM_IMPL
 #include <quaternion.h>
 #include <stdio.h>
 #include <stdlib.h>

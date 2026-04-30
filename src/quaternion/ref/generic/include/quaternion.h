@@ -506,6 +506,20 @@ void quat_lideal_create(quat_left_ideal_t *lideal,
                         const quat_lattice_t *order,
                         const quat_alg_t *alg);
 
+/**
+ * @brief MLLL_GRAM variant of quat_lideal_create
+ *
+ * Same external contract as quat_lideal_create. Internally uses
+ * quat_lattice_add_mlll_gram so the final O*x + O*N step runs MLLL on 8
+ * integer generators (Lemma 3 width) instead of HNF. Used as the routing
+ * target for SQISIGN_USE_MLLL_GRAM in sign/keygen/id2iso hot paths.
+ */
+void quat_lideal_create_mlll_gram(quat_left_ideal_t *lideal,
+                                  const quat_alg_elem_t *x,
+                                  const ibz_t *N,
+                                  const quat_lattice_t *order,
+                                  const quat_alg_t *alg);
+
 /** @}
  */
 
@@ -632,6 +646,19 @@ void quat_lideal_lideal_mul_reduced(quat_left_ideal_t *prod,
                                     const quat_alg_t *alg);
 
 /**
+ * @brief MLLL_GRAM variant of quat_lideal_lideal_mul_reduced
+ *
+ * Same external contract; uses quat_lattice_mul_mlll_gram +
+ * quat_lideal_reduce_basis_mlll_gram internally. Routed in via
+ * SQISIGN_USE_MLLL_GRAM in dim2id2iso hot paths.
+ */
+void quat_lideal_lideal_mul_reduced_mlll_gram(quat_left_ideal_t *prod,
+                                              ibz_mat_4x4_t *gram,
+                                              const quat_left_ideal_t *lideal1,
+                                              const quat_left_ideal_t *lideal2,
+                                              const quat_alg_t *alg);
+
+/**
  * @brief Replaces an ideal by a smaller equivalent one of prime norm
  *
  * @returns 1 if the computation succeeded and 0 otherwise
@@ -734,5 +761,24 @@ int quat_sampling_random_ideal_O0_given_norm(quat_left_ideal_t *lideal,
 // end quat_quat
 /** @}
  */
+
+/* ---------------------------------------------------------------------------
+ * SQISIGN_USE_MLLL_GRAM hot-path routing
+ *
+ * When SQISIGN_USE_MLLL_GRAM is defined (CMake -DSQISIGN_USE_MLLL_GRAM=ON),
+ * sign/keygen/id2iso call sites that name the HNF function are redirected to
+ * the MLLL_GRAM variant via macro alias — no source edits in callers.
+ *
+ * Files that DEFINE the affected function bodies, or that explicitly compare
+ * HNF vs MLLL_GRAM (benchmarks, equivalence tests), must define
+ * SQISIGN_MLLL_GRAM_IMPL BEFORE including this header to keep the original
+ * names visible.
+ * --------------------------------------------------------------------------- */
+#if defined(SQISIGN_USE_MLLL_GRAM) && !defined(SQISIGN_MLLL_GRAM_IMPL)
+#define quat_lideal_create                        quat_lideal_create_mlll_gram
+#define quat_lideal_reduce_basis                  quat_lideal_reduce_basis_mlll_gram
+#define quat_lideal_prime_norm_reduced_equivalent quat_lideal_prime_norm_reduced_equivalent_mlll_gram
+#define quat_lideal_lideal_mul_reduced            quat_lideal_lideal_mul_reduced_mlll_gram
+#endif
 
 #endif

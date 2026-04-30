@@ -4,6 +4,15 @@
 브랜치: `feat/mlll-ideal-operations`
 직전 마일스톤: 2026-04-19 MLLL 모듈 감사 완료 ([AUDIT_2026-04-19_KO.md](AUDIT_2026-04-19_KO.md))
 
+## 2026-04-30 정정
+
+이 문서의 이전 판본이 두 가지 사실 오류를 포함하고 있었음:
+
+1. **"Alg 1 IdealFiltration"은 논문에 존재하지 않음.** 논문의 algorithm 목록은 Alg 1 MLLL(커널) / Alg 2 CompactIdealMultiplication / Alg 3 RandomIdealGivenPrimeNorm / Alg 4 RandomEquivalentPrimeIdeal 4개이며 "Filtration"은 03Ideal.tex, 04Sampling.tex, append.tex 어디에도 등장하지 않음. P3-1, P3-2 항목 및 의사결정 로그 #2는 유령 항목으로 폐기.
+2. **Alg 4 RandomEquivalentPrimeIdeal MLLL 버전은 이미 구현됨.** `quat_lideal_prime_norm_reduced_equivalent_mlll_gram` 이 `lll_applications.c:213`에 존재하며 단위 테스트 PASS. Phase 3-1 커밋(2026-04-29)에 포함됨. P3-3 항목은 ✅ 완료로 정정.
+
+진짜 미완성은 **hot-path 라우팅(P3-2 재정의)** 1건과 **end-to-end 동치성 테스트(P3-5)** 1건. 아래 로드맵의 Phase 3 절은 이 정정에 따라 다시 읽어야 함 — 원문은 history 보존 목적으로 유지.
+
 ## 현재 상태 스냅샷
 
 ### 구현 완료
@@ -23,12 +32,14 @@
 - **L1/L3/L5 10k trials 실측 완료** (C1 픽스 반영 후) — vec 259/391/513, Gram 518/782/1026 bits
 - `sqisign_bm_mlll --mode=alg2|alg3 --iterations=N` CLI 동작
 
-### HNF 기반으로 남아있는 것
+### HNF 기반으로 남아있는 것 (2026-04-30 정정)
 
 | 논문 Alg | 기존 HNF 함수 | MLLL 버전 |
 |---|---|---|
-| Alg 1 IdealFiltration | (확인 필요) | **미구현** |
-| Alg 4 RandomEquivalentPrimeIdeal | `quat_lideal_prime_norm_reduced_equivalent` (`lll_applications.c:48`) | **미구현** |
+| Alg 4 RandomEquivalentPrimeIdeal | `quat_lideal_prime_norm_reduced_equivalent` (`lll_applications.c:120`) | ✅ `quat_lideal_prime_norm_reduced_equivalent_mlll_gram` (`lll_applications.c:213`) |
+| (보조) `quat_lideal_reduce_basis` | `lll_applications.c:7` | ✅ `quat_lideal_reduce_basis_mlll_gram` (`lll_applications.c:41`) |
+
+알고리즘 본체 단계에서 4개 paper algorithm 모두 MLLL_GRAM 구현 존재. 남은 작업은 hot-path 라우팅 + e2e 동치성 검증 — 아래 Phase 3 재정의 참고.
 
 ## 로드맵
 
@@ -88,18 +99,32 @@
 
 **결과**: Phase 3 blocker 해제. Phase 2 primary 확정이 3-레벨 전면 실증 기반으로 갱신됨.
 
-### Phase 3 — Alg 1/4 MLLL 버전 구현 (1-2주)
+### Phase 3 — MLLL_GRAM 핫 패스 라우팅 + 동치성 (재정의, 2026-04-30)
 
-**목표**: 논문 Alg 1/4를 MLLL 경로로 구현. 기존 HNF 경로와 동치성 테스트.
+**원문 (history)**: 원래 P3-1/P3-2는 "Alg 1 IdealFiltration" 설계/구현이었으나 해당 algorithm은 논문에 존재하지 않음(상단 정정 참조)이라 폐기. P3-3 (Alg 4 MLLL 변종)은 2026-04-29 Phase 3-1 커밋에 이미 구현됨.
 
-- [ ] **P3-1** Alg 1 IdealFiltration 설계 검토 (논문 03Ideal.tex + 04Sampling.tex 재정독). HNF 대조 기준이 필요하면 그때 `grep quat_lideal_filtration` 한 번이면 충분 — 별도 조사 step 아님.
-- [ ] **P3-2** `quat_lideal_filtration_mlll_gram` 구현
-- [ ] **P3-3** Alg 4 RandomEquivalentPrimeIdeal MLLL 버전
-  - 기존 `quat_lideal_prime_norm_reduced_equivalent` (`lll_applications.c`) → `quat_lideal_prime_norm_reduced_equivalent_mlll_gram` 분기
-- [ ] **P3-4** 각각에 대해 벤치 모드 추가 (`--mode=alg1`, `--mode=alg4`)
-- [ ] **P3-5** 동치성 테스트 (HNF ↔ MLLL_GRAM)
+**재정의된 목표**: paper 4개 algorithm의 MLLL_GRAM 구현이 sign/keygen/id2iso 핫 패스에서 실제로 호출되도록 라우팅하고, HNF 빌드와 MLLL_GRAM 빌드가 동치임을 e2e로 검증.
 
-**Why**: 논문의 completeness. Alg 2/3만 MLLL로 바꾸고 Alg 1/4 HNF에 남겨두면 signature 성능 이득이 부분적.
+- [x] ~~**P3-1** Alg 1 IdealFiltration 설계 검토~~ — 폐기 (유령 algorithm)
+- [x] ~~**P3-2** `quat_lideal_filtration_mlll_gram` 구현~~ — 폐기
+- [x] **P3-3** Alg 4 RandomEquivalentPrimeIdeal MLLL 버전 — `quat_lideal_prime_norm_reduced_equivalent_mlll_gram` (`lll_applications.c:213`) 구현 + 단위 테스트 5/5 PASS
+- [ ] **P3-2′** Hot-path 라우팅: `SQISIGN_USE_MLLL_GRAM=ON` 시 `quaternion.h` 매크로 alias로 sign.c / keygen.c / encode_signature.c / id2iso.c / dim2id2iso.c 의 11개 호출부(직접 ideal API 8건 + `quat_lideal_lideal_mul_reduced` 3건)가 무수정 라우팅. 4개 함수 alias 대상: `quat_lideal_create`, `quat_lideal_reduce_basis`, `quat_lideal_prime_norm_reduced_equivalent`, `quat_lideal_lideal_mul_reduced`. 본체 정의 .c 파일 3개(`ideal.c`, `lll_applications.c`, `mlll_gram.c`) + 명시적 HNF↔MLLL 비교 파일 2개(`mlll_benchmark.c`, `mlll_tests.c`)에는 `SQISIGN_MLLL_GRAM_IMPL` 가드 필요.
+  - **Acceptance (macro alias 단계)**: 단순 source-grep은 매크로 치환 전이라 통과 안 됨. 대신 다음 셋 중 하나로 검증:
+    1. **Preprocessed output**: `cmake -DSQISIGN_USE_MLLL_GRAM=ON` 빌드 후 `gcc -E src/signature/ref/lvlx/sign.c | grep -c quat_lideal_create_mlll_gram` 1+건 (가장 직접적)
+    2. **Symbol reference**: `nm build/src/signature/.../sign.c.o | grep -c '_mlll_gram'` 1+건
+    3. **Build-test**: `SQISIGN_USE_MLLL_GRAM=ON` + `OFF` 두 빌드 모두 `make test` PASS, **그리고** ON 빌드의 `sqisign_test_mlll_gram_e2e_equiv` (P3-5에서 신설) PASS
+  - **빌드 검증 명령** (사람이 즉석 확인용):
+    ```bash
+    cmake -B build_mlll -DSQISIGN_BUILD_TYPE=ref -DSQISIGN_USE_MLLL_GRAM=ON
+    make -C build_mlll && ctest --test-dir build_mlll
+    ```
+- [ ] **P3-4** 벤치 모드: `--mode=alg2|alg3|alg4` 통일 (alg1 = MLLL 커널은 unit-level만, e2e bench 대상 아님)
+- [ ] **P3-5** 동치성 테스트 (HNF 빌드 vs MLLL_GRAM 빌드):
+  - 단위 레벨: `quat_lideal_reduce_basis` ↔ `_mlll_gram` lattice equality (이미 25 trials PASS)
+  - e2e self-consistency: `SQISIGN_USE_MLLL_GRAM=ON` 빌드로 KAT 생성 + verify 자체일관성 (L1/L3/L5 100 iter)
+  - byte-identical은 기대하지 않음 (Alg 4 reduce 결과가 다른 representative를 뽑으면 sk/pk/sig 갈림). invariant: sign 항상 성공 + verify-with-matching-pk PASS
+
+**Why**: paper completeness 기준은 이미 알고리즘 본체 단계에서 충족. 핫 패스 미통합 상태에서는 Phase 1/2의 모든 측정/감사가 "보조 호출 측정"에 그침 (README "현재 상태" 표 참조). P3-2′ 통과 후에야 SQIsign 서명 성능에 대한 paper 주장이 빌드 가능 코드로 증명됨.
 
 ### Phase 4 — SQIsign 상위 통합 (2-3주)
 
@@ -126,7 +151,7 @@
 아직 미결정 항목. 진행 전에 별도 문서/메모리로 기록해야 함.
 
 1. ~~**Phase 2 백엔드** (A/B/C 중 어느 것)~~ — **2026-04-21 해결: baseline ibz_t 유지** (DECISION §5.1).
-2. **Alg 1 기존 HNF 구현 유무** (확인 필요, P3-1)
+2. ~~**Alg 1 기존 HNF 구현 유무** (확인 필요, P3-1)~~ — **2026-04-30 폐기**: 논문에 IdealFiltration algorithm 자체가 없음. 상단 정정 참조.
 3. **Constant-time 요구 수준** — Phase 2 결과 무관하게 fp scaffold가 CT 여지를 확보해 둠(`g_fp_mode` opt-in). 실수요 생길 때 재검토.
 4. **PR 1회 큰 덩어리 vs 5개 분할** — upstream 리뷰어 피드백 받아본 후 결정
 5. **Gram 외 Cohen 경로 유지 여부** — 비교/교차검증용으로 남길지, 제거할지. Phase 3 착수 전 결정 필요.
@@ -146,8 +171,8 @@
 | P1 측정 | ~2d | 2026-04-21 | ✅ 완료 |
 | P2 fixed-precision | ~11-14d → 1d | 2026-04-21 | ⚠️ **부분완료** (L1 한정 검증, 2026-04-22 trap 감사로 L3/L5 fp 미동작 발견) |
 | P2.1 dispatcher 수정 | ~1-2d → 1d | 2026-04-22 | ✅ **완료** (dispatch/widths/time/equiv 전 축 재검증, 3-레벨 PASS) |
-| P3 Alg 1/4 | ~2w | ~2026-05-05 | 착수 가능 |
+| P3 핫패스 라우팅 + 동치성 (재정의) | ~3-5d | ~2026-05-05 | P3-3 ✅, P3-2′/4/5 착수 가능 |
 | P4 SQIsign 통합 | ~3w | ~2026-05-26 | |
 | P5 PR 분리 | ~1w | ~2026-06-02 | |
 
-Phase 2가 예상 11-14일 대신 1일에 종결된 이유: B(prealloc)가 §5.5에서 즉시 탈락했고 C(fp) 전체 구현 후 sweep에서도 승격 조건 미달이라 추가 튜닝 사이클 없이 decision 확정. 실제 일정은 Alg 1 기존 구현 조사 결과에 따라 달라짐.
+Phase 2가 예상 11-14일 대신 1일에 종결된 이유: B(prealloc)가 §5.5에서 즉시 탈락했고 C(fp) 전체 구현 후 sweep에서도 승격 조건 미달이라 추가 튜닝 사이클 없이 decision 확정. Phase 3 일정은 2026-04-30 정정으로 P3-1/P3-2(IdealFiltration)가 폐기되어 단축됨 — 남은 작업은 매크로 alias + e2e 동치성 스크립트.
