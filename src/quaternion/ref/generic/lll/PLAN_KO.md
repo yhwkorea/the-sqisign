@@ -4,14 +4,32 @@
 브랜치: `feat/mlll-ideal-operations`
 직전 마일스톤: 2026-04-19 MLLL 모듈 감사 완료 ([AUDIT_2026-04-19_KO.md](AUDIT_2026-04-19_KO.md))
 
-## 2026-04-30 정정
+## 2026-04-30 정정 + 새 finding
 
 이 문서의 이전 판본이 두 가지 사실 오류를 포함하고 있었음:
 
 1. **"Alg 1 IdealFiltration"은 논문에 존재하지 않음.** 논문의 algorithm 목록은 Alg 1 MLLL(커널) / Alg 2 CompactIdealMultiplication / Alg 3 RandomIdealGivenPrimeNorm / Alg 4 RandomEquivalentPrimeIdeal 4개이며 "Filtration"은 03Ideal.tex, 04Sampling.tex, append.tex 어디에도 등장하지 않음. P3-1, P3-2 항목 및 의사결정 로그 #2는 유령 항목으로 폐기.
 2. **Alg 4 RandomEquivalentPrimeIdeal MLLL 버전은 이미 구현됨.** `quat_lideal_prime_norm_reduced_equivalent_mlll_gram` 이 `lll_applications.c:213`에 존재하며 단위 테스트 PASS. Phase 3-1 커밋(2026-04-29)에 포함됨. P3-3 항목은 ✅ 완료로 정정.
 
-진짜 미완성은 **hot-path 라우팅(P3-2 재정의)** 1건과 **end-to-end 동치성 테스트(P3-5)** 1건. 아래 로드맵의 Phase 3 절은 이 정정에 따라 다시 읽어야 함 — 원문은 history 보존 목적으로 유지.
+P3-2′ (hot-path 라우팅) 및 P3-5 (e2e 동치성)은 모두 ✅ 완료 (CI commit `c3e7b37` 기준 양쪽 빌드 PASS).
+
+### 새 research finding (2026-04-30): Phase 1 fp 폭이 production을 못 담음
+
+P3-2′ 통합 후 fp 백엔드 폭 부족이 발견됨. 3회 iteration:
+
+| iter | vec budget (L1/L3/L5) | gram budget (L1/L3/L5) | 결과 |
+|---|---|---|---|
+| 원본 (Phase 1 random corpus) | 5/7/9 limbs (320/448/576b) | 9/13/17 (576/832/1088b) | gram 749/1137/1507b로 trap |
+| 2배 확대 | 11/16/20 (704/1024/1280b) | 17/25/33 (1088/1600/2112b) | gram 1275/1921/2555b로 trap |
+| 4배 확대 | 24/32/40 (1536/2048/2560b) | 48/64/80 (3072/4096/5120b) | vec 입력이 1536b 초과 |
+
+**해석**: Phase 1 측정값(vec 259/391/513, gram 518/782/1026)은 *MLLL 내부의 settled state*에서 측정된 값이며, production sign/keygen이 MLLL에 *입력으로 넘기는* generator size에는 적용되지 않음. 입력은 sign/keygen의 호출 사슬(chain of `lattice_mul` → `reduce` → `lideal_create` → ...)을 거치며 SQIsign protocol-level 상태에 의해 누적되어 도착함. MLLL의 bit-size 분석만으로는 입력 크기를 bound할 수 없음.
+
+**현재 결정 (2026-04-30, commit `c3e7b37`)**: `SQISIGN_USE_MLLL_GRAM=ON`일 때 `g_fp_mode=0` default (ibz_t fallback). fp는 입력 bound가 통제된 unit test/bench 환경에서만 opt-in. 확대된 폭은 헤더에 보존(향후 Phase 4 protocol-level analysis 활용 대비).
+
+**Phase 4 추가 task** (제안): SQIsign protocol bound 기반으로 fp 폭 산정. secret/commitment ideal 최대 norm + MLLL 도달 전 lattice op 체인 길이로부터 입력 generator의 worst-case bit size 유도.
+
+아래 로드맵의 Phase 3 절은 이 정정에 따라 다시 읽어야 함 — 원문은 history 보존 목적으로 유지.
 
 ## 현재 상태 스냅샷
 
