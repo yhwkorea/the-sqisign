@@ -1,3 +1,4 @@
+#define SQISIGN_MLLL_GRAM_IMPL
 #include <quaternion.h>
 #include <stdlib.h>
 #include "internal.h"

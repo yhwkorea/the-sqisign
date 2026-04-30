@@ -13,7 +13,8 @@
 2. `SQISIGN_USE_MLLL_GRAM=ON` 시 매크로 alias 로 sign.c/keygen.c **무수정 라우팅** ← 다음 단계
 3. `apps/PQCgenKAT_sign.c` 에 MLLL 빌드 분기 → `.rsp.MLLL` 진짜 MLLL 출처화
 4. README + PLAN_KO.md + commit msg 시점 동기화
-5. (선택) Algorithm 1 IdealFiltration 변종
+
+> **2026-04-30 정정**: 이전 판본의 5번 항목 "Algorithm 1 IdealFiltration 변종"은 **폐기**. 논문 *Compact Quaternion Algorithms for SQIsign*은 Alg 1=MLLL 커널 / Alg 2=CompactIdealMultiplication / Alg 3=RandomIdealGivenPrimeNorm / Alg 4=RandomEquivalentPrimeIdeal 4개로 구성되며 "IdealFiltration"이라는 algorithm은 paper LaTeX 어디에도 등장하지 않음. 자세한 내용은 `src/quaternion/ref/generic/lll/PLAN_KO.md` 상단 "2026-04-30 정정" 절 참조.
 
 **Phase 3-2 완료 기준**: `grep -rn '_mlll_gram\b' src/signature/ src/id2iso/ src/sqisign.c` 가 1+건 출력 + `make test` 전 통과.
 
@@ -30,8 +31,7 @@
 | **`_mlll_gram` 핫 패스 호출** | **❌** | `grep -rn '_mlll_gram\b' src/signature/ ...` → 빈 |
 | **`SQISIGN_USE_MLLL_GRAM` 매크로 사용처** | **❌** | `grep -rn 'SQISIGN_USE_MLLL_GRAM' src/ --include='*.c'` → 빈 |
 | **KAT `.rsp.MLLL` 출처 = MLLL binary** | **❌** | `apps/PQCgenKAT_sign.c` 에 MLLL 분기 없음 (HNF binary가 생성) |
-| **Algorithm 1 IdealFiltration 변종** | **❌** | 함수 자체 없음, PLAN_KO.md 미구현 표기 |
-| **README/PLAN/commit msg 동기화** | 🟡 | Phase 3-1 commit 으로 부분 회복 중 |
+| **README/PLAN/commit msg 동기화** | 🟡 | Phase 3-1 commit 으로 부분 회복 중, 2026-04-30 IdealFiltration 유령 항목 제거 |
 
 → **알고리즘 컴포넌트 수준: 약 80% 완료** (Phase 3-1 함수 본체 추가)
 → **빌드 통합 수준: 0% (sign이 MLLL을 한 번도 호출하지 않음 — Phase 3-2 영역)**
@@ -57,13 +57,12 @@
 
 | 페이퍼 | 구현 위치 | 상태 |
 |---|---|---|
-| Algorithm 1 (MLLL 본체) | `src/quaternion/ref/generic/lll/mlll.c:170` | ✅ 27 라인 1:1 매핑 |
-| Algorithm 2 (lattice mul) | `mlll.c:399` `quat_lattice_mul_mlll` | ✅ |
-| Algorithm 3 (lideal create) | `mlll.c:451` `quat_lattice_add_mlll`, `mlll_gram.c:880` | ✅ |
-| Algorithm 4 (Compact ideal mul) | `mlll.c:435` (16-generator → MLLL) | ✅ wrapper |
+| Algorithm 1 MLLL 커널 | `src/quaternion/ref/generic/lll/mlll.c:170` `quat_mlll`, `mlll_gram.c` `quat_mlll_gram` | ✅ |
+| Algorithm 2 CompactIdealMultiplication | `mlll.c:399` `quat_lattice_mul_mlll` (16-generator), `mlll_gram.c` `quat_lattice_mul_mlll_gram` | ✅ |
+| Algorithm 3 RandomIdealGivenPrimeNorm | `mlll.c:451` `quat_lattice_add_mlll`, `mlll_gram.c:880` `quat_lideal_create_mlll_gram` | ✅ |
+| Algorithm 4 RandomEquivalentPrimeIdeal | `lll_applications.c:213` `quat_lideal_prime_norm_reduced_equivalent_mlll_gram` | ✅ (Phase 3-1, 단위 테스트 5/5 PASS) |
 | Lemma `mlll-bound` (정수 상한) | 측정값 ≤ 페이퍼 상한 | ✅ 3 레벨 |
 | Appendix A.1 (μ/B real) | mpfr_t PREC=1024 | ✅ |
-| **IdealFiltration 변종 (Alg 1 wrapper)** | — | **❌** |
 | **sign/keygen 핫 패스 통합** | — | **❌** |
 
 ## 빌드 옵션

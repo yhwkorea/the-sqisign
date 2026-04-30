@@ -16,6 +16,7 @@
 #include <string.h>
 #include <inttypes.h>
 
+#define SQISIGN_MLLL_GRAM_IMPL
 #include <quaternion.h>
 #include <internal.h>
 #include "lll_internals.h"
