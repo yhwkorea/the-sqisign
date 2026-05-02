@@ -150,15 +150,46 @@ P3-2′ 통합 후 fp 백엔드 폭 부족이 발견됨. 3회 iteration:
 
 **Why**: paper completeness 기준은 이미 알고리즘 본체 단계에서 충족. 핫 패스 미통합 상태에서는 Phase 1/2의 모든 측정/감사가 "보조 호출 측정"에 그침 (README "현재 상태" 표 참조). P3-2′ 통과 후에야 SQIsign 서명 성능에 대한 paper 주장이 빌드 가능 코드로 증명됨.
 
-### Phase 4 — SQIsign 상위 통합 (2-3주)
+### Phase 4 — SQIsign protocol-level fp 폭 산정 (2-3주, 연구성)
 
-**목표**: sign/verify 경로에서 MLLL_GRAM 사용, 실제 서명 성능 측정.
+> **2026-05-02 redefine**: Phase 4 의 원 P4-1~P4-5 는 **이미 Phase 3 의 3-2′ + 3-5 에 흡수 완료** (`feature flag 전환` = alias, `test_sqisign` = e2e, `KAT 재생성` = README "알려진 위험" 2). Phase 4 의 진짜 task 는 finding 4 (2026-04-30) 의 후속 — production hot path 의 fp 폭을 SQIsign protocol bound 로부터 derived bound 로 산정. 이 redefine 으로 P4-1~5 (legacy) → P4-A~D (active) 로 교체.
 
-- [ ] **P4-1** `quat_lideal_*` 호출부에서 HNF → MLLL_GRAM 전환 (feature flag 우선)
-- [ ] **P4-2** 전체 `test_sqisign` 통과 확인 (L1/L3/L5)
-- [ ] **P4-3** KAT 벡터 재생성 및 검증
-- [ ] **P4-4** sign/verify 성능 벤치 (cycle count)
-- [ ] **P4-5** 기존 HNF 기반 PQC reference 대비 메모리/시간 회귀 없음 확인
+**목표**: ON 빌드의 `g_fp_mode=1` default 복원. `quat_mlll_gram` 입력 generator 의 worst-case bitsize 를 SQIsign protocol parameter (SEC_DEGREE / COM_DEGREE / norm bound 등) 로부터 derived bound 로 산정 후 `vec_widths`/`gram_widths` 적용.
+
+#### 새 Phase 4 task (active, 2026-05-02 정의)
+
+- [ ] **P4-A** Production hot path 입력 generator bitsize **측정**:
+    - `quat_mlll_gram` 진입점에 compile-time guard (`SQISIGN_MLLL_INPUT_TRACK` 또는 기존 `bitsize_tracker.h` 확장) instrumentation 추가.
+    - lvl1/3/5 각 1회 sign + nistapi 실행하면서 quat_mlll_gram 호출당 입력 generator max bitsize 누적 통계 (avg/max/p99) 출력.
+    - 산출물: `bench_logs/p4_a_input_bits/L{1,3,5}.log`, hot path 호출당 입력 분포.
+    - Acceptance: 3 레벨 모두 통계 수집, 측정값이 PLAN_KO §finding 4 의 749/1137/1507 (gram, MLLL 내부) 가 아닌 **입력 generator** 분포임을 명시.
+
+- [ ] **P4-B** SQIsign 호출 사슬 **수기 분석** (소스 read-only, 코드 변경 0):
+    - `signature/ref/lvlN/sign.c`, `keygen.c`, `id2iso.c`, `dim2id2iso.c` 에서 `quat_mlll_gram` 의 4개 caller (= alias 대상 함수: `quat_lideal_create`, `quat_lideal_reduce_basis`, `quat_lideal_prime_norm_reduced_equivalent`, `quat_lideal_lideal_mul_reduced`) 까지 도달하는 lattice op 체인을 mapping.
+    - 각 노드에서 입력→출력 bit-size 누적 식 도출 (예: `lattice_mul(I, J)` 의 출력 generator bitsize = `f(I.bits, J.bits, p_bits)`).
+    - 산출물: `PHASE4_CALL_CHAIN_KO.md` 또는 PLAN_KO 부록 — 텍스트 mapping diagram.
+    - Acceptance: 모든 caller 의 입력 → MLLL_GRAM 도달까지 bitsize 누적 식이 명시되고 SEC_DEGREE/COM_DEGREE 등 protocol parameter 로 환원됨.
+
+- [ ] **P4-C** Worst-case bound **산정**:
+    - P4-B 의 식에 lvl1/3/5 의 SEC_DEGREE/COM_DEGREE/p_bits 대입 → worst-case 입력 generator bitsize 값.
+    - P4-A 측정값과 **일치 또는 더 큰 값** 인지 검증 (bound 이 측정 분포를 cover).
+    - 일치하지 않으면 P4-B 식 수정 또는 P4-A 측정 재수행.
+    - 산출물: 3 레벨 worst-case 표 (vec/gram bitsize 별).
+    - Acceptance: P4-A max ≤ P4-C worst-case 식 derived value, 3 레벨 PASS.
+
+- [ ] **P4-D** fp 폭 **적용 + 검증**:
+    - `quat_fp_widths_t` 의 vec_widths / gram_widths 를 P4-C 의 worst-case 로 갱신 (현재 hardcoded 2/4 배 확대 폭 → derived 폭으로 교체).
+    - `mlll_gram.c` 의 ON 빌드 default `g_fp_mode = 0` → `g_fp_mode = 1` 로 복원.
+    - lvl1/3/5 의 ctest (signature, nistapi, threadsafety, SELFTEST, id2iso) ON 빌드 PASS 확인.
+    - 산출물: `mlll_gram.c` + `quat_fixed_precision.c` 의 폭 갱신 commit.
+    - Acceptance: ON 빌드 ctest 전 통과, fp trap 0건, README "fp 백엔드 (production)" 항목 ✅ 로 갱신.
+
+**의존성 그래프**: P4-A → P4-B → P4-C → P4-D. P4-A 와 P4-B 는 병행 가능 (측정 vs 분석). P4-C 는 둘 다 필요. P4-D 는 P4-C 결과 적용.
+
+**리스크**:
+- P4-B 의 호출 사슬 수기 분석이 SQIsign protocol 전체 spec read 를 요구 — 페이퍼 (Compact Quaternion Algorithms for SQIsign) 와 SQIsign 메인 spec 양쪽 동시 read.
+- P4-C 의 식이 SEC_DEGREE 등 protocol parameter 의 함수로 닫히지 않을 수도 있음 (예: random ideal sampling 분포가 영향). 그 경우 P4-A 측정값을 보수적으로 inflated bound 로 사용하는 fallback 결정.
+- fp 폭이 너무 커지면 P2-decide 의 "compact 연산이 고정폭에 들어간다" 페이퍼 contribution 의미가 약화됨. P4-D 직전에 trade-off 재검토.
 
 ### Phase 5 — PR 분리 & upstream (1주)
 
@@ -169,6 +200,81 @@ P3-2′ 통합 후 fp 백엔드 폭 부족이 발견됨. 3회 iteration:
 - [ ] **P5-3** PR 3: Alg 1/4 래퍼
 - [ ] **P5-4** PR 4: Fixed-precision 전환 (별도, 큰 표면적)
 - [ ] **P5-5** PR 5: SQIsign 상위 호출부 전환
+
+#### Phase 5 — commit → PR mapping (2026-05-02 작성)
+
+`feat/mlll-ideal-operations` 의 47 commit (= main…HEAD) 분류. 첫 columnis commit short-hash, 둘째 = 1차 분류, 셋째 = 메모. 실 cherry-pick 시 의존성 (빌드/테스트 PASS) 점검은 PR 단위 진행 시 별도 수행.
+
+| Commit | PR | 메모 |
+|---|---|---|
+| `24344c1` implement MLLL | 1 | 커널 본체 |
+| `59e3d19` HNF vs MLLL bench | 1 | bench 도구 (커널과 묶음) |
+| `7c20926` guard tracker + KO doc | 1 | tracker compile flag |
+| `4cde9f8` README structure | 1 | doc only |
+| `1556127` time comparison doc | 1 | doc only |
+| `a772be3` README EN math terms | 1 | doc only |
+| `5c26523` τ swap fix + tracker GS + tests | 1 | mlll.c 버그픽스 |
+| `b722117` float GSO (dpe) + Hybrid HNF | 1 | l2 + mlll core |
+| `b6e667e` restore HNF post-proc | 1 | mlll.c |
+| `f10b869` floatGSO bench doc | 1 | doc only |
+| `b7dfd42` D_k=0 exact + remove HNF post | 1 | mlll.c |
+| `259d275` paper-to-code mapping doc | 1 | doc only |
+| `1cb4922` nrd(I) bound doc | 1 | doc only |
+| `8fd6b75` Add files via upload | ? | 수기 확인 — 한 commit 내 다양 파일 가능, mapping 결정 보류 |
+| `4c3a599` audit + Gram 래퍼/벤치 | 2 | Alg 2 = `lattice_*_mlll_gram` |
+| `74449ae` PLAN_KO.md 초안 | 2 | doc (PR 2 최초 commit) |
+| `9244d17` Phase 1 + Lemma 1 doc | 2 | doc |
+| `85bc67a` Phase 1 측정 로그 | 2 | bench data |
+| `b196331` P2-1 백엔드 결정 doc | 4 | fixed-prec 시작 |
+| `4edc876` P2-B prealloc scaffold | 4 | |
+| `601815f` P2-C-types skeleton | 4 | |
+| `8b30e32` P2-C-gram step1 add/sub | 4 | |
+| `b18e49e` P2-C-gram step2 mul | 4 | |
+| `97eb079` P2-C-gram step3 + dispatcher | 4 | |
+| `58540b1` P2-overflow trap | 4 | |
+| `f3c7684` --fp flag in bench | 4 | |
+| `17c3b92` P2-decide doc | 4 | |
+| `e87ec2f` P2-decide flip (fp primary) | 4 | code+doc |
+| `bfd4c16` P2-overflow budget 정정 | 4 | |
+| `82814de` P2.1 dispatcher 임계값 | 4 | |
+| `3a89044` P2.1 time/equiv rerun | 4 | code+test |
+| `5ef9b76` paper-strict 마무리 (HNF fallback 제거) | 4 | |
+| `d1073ee` README paper-strict 섹션 | 4 | doc (이전엔 거짓 표현. PR 4 안에 정정과 함께 포함) |
+| `82bf615` README 거짓 정정 + CLAUDE.md 신설 | meta | cross-cutting. 별도 메타-PR 또는 PR 5 머리 |
+| `a16e9f7` Phase 3-1 lideal helpers | 3 | Alg 4 래퍼 본체 |
+| `d84d1c2` hot-path alias + doc | 5 | |
+| `0e19909` CI workflow | 5 | |
+| `b2e2d5e` CI workflow (재커밋) | 5 | duplicate? 한 PR 내에서 squash 후보 |
+| `2e4d178` undef alias + namespace | 5 | |
+| `3492126` g_fp_mode=0 default ON | 5 | |
+| `7e8f0eb` size-reduce cap + IMPL guard | 5 | |
+| `f06c35a` resize fp widths for prod | 5 | |
+| `44dbcc5` widen fp budgets again | 5 | |
+| `c3e7b37` fall back to ibz_t (finding) | 5 | |
+| `e82d86e` PLAN_KO finding doc | 5 | doc |
+| `37c9338` README sync | 5 | doc |
+| `4bdb0e8` alg4 bench mode (P3-4) | 5 | |
+
+**분류 합계** (8fd6b75 보류 제외):
+- PR 1 (MLLL 커널): 13 commit
+- PR 2 (Alg 2/3 래퍼): 4 commit
+- PR 3 (Alg 1/4 래퍼): 1 commit
+- PR 4 (Fixed-precision): 14 commit
+- PR 5 (SQIsign 상위 호출부 + alias 라우팅 + bench 통일): 12 commit
+- meta (README 거짓 정정 + CLAUDE.md): 1 commit
+- 보류 (수기 확인 필요): 1 commit (`8fd6b75`)
+
+**다음 step (이 mapping 의 acceptance criteria)**:
+1. `8fd6b75 Add files via upload` 의 변경 파일 목록 확인 (`git show --stat 8fd6b75`) → 위 PR 중 적절한 곳에 배치.
+2. PR 별 cherry-pick branch 생성 (`feat/mlll-pr1-kernel`, …, `feat/mlll-pr5-routing`).
+3. 각 PR branch 에서 빌드 + 단위 테스트 PASS 확인 (의존성 누락이면 commit 재배치).
+4. PR 5 는 PR 4 (fixed-precision) 에 의존 — 의존 그래프: 1 → 2 → 3 → 4 → 5. PR 1/2 는 독립적 머지 가능. PR 3 은 1, 2 에 의존. PR 4 는 1 에 의존. PR 5 는 1, 2, 3, 4 모두에 의존.
+5. meta-PR (`82bf615`) 은 본 mapping 작성 후의 상위 README/CLAUDE.md 최신본을 따로 PR 5 의 머리에 넣는 것이 깔끔. 또는 모든 PR 머지 후 마지막에 single doc-sync PR.
+
+**리스크**:
+- 47 commit 중 일부는 squash 가 적절 (예: `0e19909` + `b2e2d5e` CI 중복).
+- Cherry-pick 시 conflict 가능성: 같은 파일에 여러 PR 의 변경이 누적된 경우 (예: `lll_applications.c` 는 PR 1, 3, 5 모두에 등장).
+- `_mlll_old.c` 같은 untracked 파일은 PR 에 포함되지 않음 (working tree 정리 별도 task).
 
 ## 의사결정 로그에 남겨야 할 것
 
