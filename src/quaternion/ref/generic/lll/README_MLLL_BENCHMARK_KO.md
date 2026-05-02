@@ -61,17 +61,25 @@ LLL-reduced basis에서 nrd(α_s) ≤ 8·nrd(I) (Minkowski bound)이므로:
 MLLL 중간값 ≤ 64 · r1^2 · r2^2 · nrd(I1) · nrd(I2)
 ```
 
-이는 Modified HNF bound의 **제곱근** (Lemma 12: r^8·nrd^4 vs MLLL: r^4·nrd^2). L1 실측 389 bits가 HNF 이론 bound보다 훨씬 작은 이유.
+이는 Modified HNF bound의 **제곱근** (Lemma 12: r^8·nrd^4 vs MLLL: r^4·nrd^2). L1 실측 GRAM vec 259 bits가 HNF 실측 2160 bits보다 훨씬 작은 이유.
 
-### 실험적 검증
+### 실험적 검증 (2026-04-19 C1 감사 반영, 10k trials × 3 levels, `--mode=alg2`)
 
-| Level | 입력 bits | MLLL vec | 수정 HNF (Lemma 12) | 원본 HNF (실측) |
-|-------|----------|----------|---------------------|----------------|
-| L1 (p~2^253) | 127 | **389** | ~1016 (m^2) | 2160 |
-| L3 (p~2^381) | 192 | **571** | ~1528 | 3238 |
-| L5 (p~2^509) | 255 | **758** | ~2032 | 4307 |
+| Level | 입력 bits | GRAM vec max (Lemma 1) | GRAM Gram max (Lemma 3) | HNF int. max | Cohen MLLL max |
+|-------|----------|-----------------------|--------------------------|--------------|----------------|
+| L1 (p~2^253) | 127 | **259** | **518** | 2160 | 3543 |
+| L3 (p~2^381) | 193 | **391** | **782** | 3293 | 5389 |
+| L5 (p~2^509) | 254 | **513** | **1026** | 4330 | 7102 |
 
-MLLL 중간 bits ≈ `norm_bits + log2(p)` ≈ `3 * input_bits`. Lemma 1과 일치 — quaternion 곱에서 p 인자가 좌표 2,3에 곱해지기 때문.
+**읽는 법**:
+- **GRAM vec**은 Lemma 1의 벡터 좌표 bound (~`nrd(α)·nrd(β)`의 제곱근 + p 보정).
+- **GRAM Gram entry**는 Lemma 3의 Gram 원소 bound (~`2·max‖a‖²`)에 정확히 포화. Fixed-precision typedef 결정의 근거.
+- **Cohen MLLL max**는 비교용(d/Λ integral GSO 경로). Lemma 3 밖이라 ~6× 폭주.
+
+**C1 픽스 영향** (감사 `mlll.c` `track_intermediate` 5곳 누락):
+- Cohen 경로: L1 3028 → **3543** bits (+515). 추적 구멍이 그 크기만큼 실재.
+- GRAM 경로: L1 516 → **518** (+2), L3 780 → 782 (+2), L5 1025 → 1026 (+1) — 거의 다 추적돼 있어 변동 미미.
+- 결론: **B\*_{1,3,5} typedef 결정엔 영향 없음**.
 
 ## 논문 알고리즘 → 코드 매핑
 
@@ -104,11 +112,48 @@ quat_mlll(&(res->basis), &rank, generators, 16, alg);  // HNF → MLLL 대체
 
 논문 Lemma 1:
 ```
-|M_{1,l}|, |M_{2,l}| ≤ sqrt(nrd(alpha) * nrd(beta))      ← 좌표 0,1
-|M_{3,l}|, |M_{4,l}| ≤ (1/sqrt(p)) * sqrt(nrd(alpha) * nrd(beta))  ← 좌표 2,3
+|M_{1,l}|, |M_{2,l}| ≤ sqrt(nrd(alpha) * nrd(beta))                 ← 좌표 0,1
+|M_{3,l}|, |M_{4,l}| ≤ (1/sqrt(p)) * sqrt(nrd(alpha) * nrd(beta))   ← 좌표 2,3
 ```
 
-Level 1: nrd ≈ 2^127, p ≈ 2^253. Quaternion 곱 후 좌표 ≈ 127+253 = 380 bits. 실측 389 bits → **Lemma 1 bound 일치**.
+nrd(α·β) = M₁² + M₂² + p(M₃² + M₄²) ≤ nrd(α)·nrd(β) 로부터 각 항의 norm-form 기여분을 분리한 bound.
+
+#### 이론 vs 실측 (10k trials, 2026-04-19 C1 픽스 후)
+
+| Level | nrd ≈ | p ≈ | 좌표 0,1 이론 bits | 좌표 2,3 이론 bits | GRAM vec 실측 max |
+|-------|-------|-----|---------------------|---------------------|-------------------|
+| L1 | 2^127 | 2^253 | 127 | ≈ 0 | **259** |
+| L3 | 2^193 | 2^381 | 193 | ≈ 2 | **391** |
+| L5 | 2^254 | 2^509 | 254 | ≈ 0 | **513** |
+
+> 좌표 2,3 이론 bits = `(nrd(α) + nrd(β) − log₂ p) / 2` = L1: `(127+127−253)/2 ≈ 0.5`, L3: `(193+193−381)/2 ≈ 2.5`, L5: `(254+254−509)/2 ≈ −0.5` → 사실상 0 (거의 0벡터).
+
+#### 실측이 이론 bound의 ~2× 커지는 이유
+
+Lemma 1은 **단일 기약 원소** α·β의 좌표 bound. 실측은 MLLL intermediate 벡터 `b[]`의 좌표 최대치로, 다음 요인이 겹쳐짐:
+
+1. **Denom scale**: `lat1.denom = r_1`이 basis 좌표에 곱해진 상태로 `quat_alg_coord_mul`에 들어감. r·α·β의 좌표는 r²만큼 커짐 (~`r_1·r_2` 추가 factor).
+2. **16개 generator 조합**: 4×4 basis 쌍 중 non-min원소(LLL-reduced basis 내부 b_3, b_4 등)가 b_1보다 큼. Minkowski 2nd/4th successive minima까지 들어가면 `√(nrd) → √(γ_4·nrd) ≈ 2√(nrd)` 수준 팽창.
+3. **Size-reduce 전 일시 팽창**: MLLL Pohst 루프에서 dependent 벡터 제거 전 `b[m] -= q·b[l]` 직후 최대치가 순간적으로 2× 부근까지 오를 수 있음 (tracker는 `ibz_mul` 출력을 찍으므로 이 순간 포착).
+
+결과적으로 실측 **vec bits ≈ 2 · log₂(nrd) + O(log p^(1/2))** 관계. 차수는 Lemma 1 bound와 동일(= log nrd + constant).
+
+#### 핵심 관찰: Lemma 3이 fixed-precision 결정 요인
+
+Lemma 3: `|Gram entry <b_i, b_j>| ≤ 2·max‖a‖²`. 여기서 `‖·‖²`는 norm form `a₀² + a₁² + p(a₂² + a₃²)`. GRAM 경로에서 LLL-reduced basis는 `a_2, a_3 ≈ 0` 성분이 지배하므로 사실상 `‖·‖² ≈ a₀² + a₁² ≈ max|a_k|² · 4`. 결과적으로:
+
+```
+Gram_bits  ≤  2·vec_bits + 3    (Cauchy-Schwarz: <b_i,b_j>² ≤ ‖b_i‖²·‖b_j‖²)
+```
+
+| 대상 | 이론 | 실측 (L1) | 실측 (L3) | 실측 (L5) |
+|------|------|-----------|-----------|-----------|
+| vec max | `≤ 2·log₂(nrd)+O(1)` | **259** | **391** | **513** |
+| Gram max | `≤ 2·vec + 3` | **518** = 2·259+0 | **782** = 2·391+0 | **1026** = 2·513+0 |
+
+실측 Gram bits가 정확히 `2·vec bits` — Cauchy-Schwarz bound의 **상한 타이트**. p 인자가 들어간 항(p·a₂·b₂)이 기여하지 않는 이유는 reduced basis에서 a₂, a₃ 좌표가 1~2 bits 수준이라 a₀·b₀ + a₁·b₁ 항이 완전 지배하기 때문. Fixed-precision typedef 폭(Gram 9/13/17 × u64)은 이 2× 관계를 기준으로 잡혀 있으며, 10k trials 전체에서 이 bound 위로 벗어난 샘플이 **0건**이었음.
+
+**Why this matters**: Cohen integral GSO 경로는 `d[k]/Λ[i][j]` 값이 Lemma 3 밖이라 L1에서 3543 bits, L5에서 7102 bits까지 폭주. GRAM 경로(L²-style Gram + dpe)만 Lemma 3에 의해 bounded — fixed-precision 전환의 **유일한 안전 경로**.
 
 ## MLLL 내부 알고리즘
 
@@ -177,6 +222,54 @@ NIST-I (p ≈ 2^253):
 | `compact_ideal_multiplication` | IdealMul 전체 파이프라인 | Algorithm 9 end-to-end |
 | `realistic_scale` | 127-bit prime norm | NIST Level 1 parameter regime |
 | `tau_path` | generator 적재 순서 | MLLL load/reduce/load cycle (Pohst §2) |
+
+## 현재 상태
+
+- **테스트**: MLLL 단위 6/6 통과, SQIsign 전체 35/35 통과
+- **SQIsign 파이프라인**: lvl1/3/5 각 10회 반복 KeyGen+Sign+Verify 전부 통과
+- **HNF 의존성**: MLLL 경로에서 완전 제거
+
+### SQIsign 전체 파이프라인 타이밍 (10회 반복, KeyGen+Sign+Verify)
+
+| 레벨 | 소수 | 10회 총 시간 | 1회당 | HNF 1회 (ctest) |
+|------|------|-------------|-------|-----------------|
+| L1 | p ≈ 2^253 | 0.79 s | **79 ms** | 81 ms |
+| L3 | p ≈ 2^381 | 1.98 s | **198 ms** | 206 ms |
+| L5 | p ≈ 2^509 | 3.37 s | **337 ms** | 344 ms |
+
+파이프라인 수준에서는 HNF와 비슷 — isogeny 연산이 지배적이므로 MLLL 오버헤드는 미미함.
+
+### Alg 2 CompactIdealMultiplication 벤치 (10k trials, 2026-04-19 C1 픽스 후)
+
+| 레벨 | 입력 bits | HNF avg/max | GRAM avg/max | Cohen avg/max | 출력 bits |
+|------|----------|-------------|--------------|---------------|-----------|
+| L1 | 127 | — / 2160 | — / 518 | — / 3543 | — |
+| L3 | 193 | 3096 / 3293 | 769 / 782 | 5244 / 5389 | 192-194 |
+| L5 | 254 | 4075 / 4330 | 1014 / 1026 | 6883 / 7102 | 253-255 |
+
+### Alg 3 RandomIdealGivenPrimeNorm 벤치 (10k trials)
+
+| 레벨 | 입력 bits | HNF avg/max | GRAM vec avg/max (Lemma 1) | GRAM Gram avg/max (Lemma 3) | HNF ms / GRAM ms (GRAM/HNF) |
+|------|----------|-------------|-----------------------------|-------------------------------|------------------------------|
+| L3 | 193 | 772 / 778 | 194 / 195 | 767 / 771 | 191.05 / 119.13 (0.62) |
+| L5 | 254 | 1016 / 1022 | 254 / 256 | 1012 / 1015 | 210.23 / 128.14 (0.61) |
+
+**Fixed-precision 요구사항** (GRAM 경로):
+- L1: vec ≤ 259 → **5×u64 (320 bits)**, Gram ≤ 518 → **9×u64 (576 bits)**
+- L3: vec ≤ 391 → **7×u64 (448 bits)**, Gram ≤ 782 → **13×u64 (832 bits)**
+- L5: vec ≤ 513 → **9×u64 (576 bits)**, Gram ≤ 1026 → **17×u64 (1088 bits)**
+
+Cohen 경로는 d/Λ integral GSO 추적 폭이 Lemma 3 밖이라 ~6× 더 큼(L5 7102 bits). 프로덕션은 **GRAM 기본**, Cohen은 비교/교차검증 전용.
+
+### 시간 성능 (Alg 2, 10k trials 총합 ms)
+
+| 레벨 | HNF | Cohen MLLL | GRAM | GRAM/Cohen | GRAM/HNF |
+|------|-----|------------|------|------------|----------|
+| L3 | 2098 | 127270 | 7043 | 5.5% | 3.36x |
+| L5 | 2332 | 238530 | 9454 | 4.0% | 4.05x |
+
+- Cohen 경로는 recompute-from-scratch O(β²) 때문에 HNF 대비 ~60-100× 느림. GRAM 경로는 ~3-4× 느림 수준으로 실용적.
+- 레벨↑ GRAM 상대 비중↑ (L3 5.5% → L5 4.0%) — bitsize 누적 효과가 Cohen 쪽에서 더 가파르게 커짐.
 
 ## 재현 방법
 
