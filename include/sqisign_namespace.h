@@ -801,11 +801,15 @@
 // Namespacing symbols exported from lll_applications.c:
 #undef quat_lideal_lideal_mul_reduced
 #undef quat_lideal_prime_norm_reduced_equivalent
+#undef quat_lideal_prime_norm_reduced_equivalent_mlll_gram
 #undef quat_lideal_reduce_basis
+#undef quat_lideal_reduce_basis_mlll_gram
 
 #define quat_lideal_lideal_mul_reduced                  SQISIGN_NAMESPACE_GENERIC(quat_lideal_lideal_mul_reduced)
 #define quat_lideal_prime_norm_reduced_equivalent       SQISIGN_NAMESPACE_GENERIC(quat_lideal_prime_norm_reduced_equivalent)
+#define quat_lideal_prime_norm_reduced_equivalent_mlll_gram SQISIGN_NAMESPACE_GENERIC(quat_lideal_prime_norm_reduced_equivalent_mlll_gram)
 #define quat_lideal_reduce_basis                        SQISIGN_NAMESPACE_GENERIC(quat_lideal_reduce_basis)
+#define quat_lideal_reduce_basis_mlll_gram              SQISIGN_NAMESPACE_GENERIC(quat_lideal_reduce_basis_mlll_gram)
 
 // Namespacing symbols exported from lll_verification.c:
 #undef ibq_vec_4_copy_ibz
