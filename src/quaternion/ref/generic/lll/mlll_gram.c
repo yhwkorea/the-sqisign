@@ -16,6 +16,7 @@
 #define SQISIGN_MLLL_GRAM_IMPL
 #include <quaternion.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <assert.h>
 #include "internal.h"
 #include "lll_internals.h"
@@ -828,6 +829,51 @@ cleanup:
 
 /* ---------- dispatcher ---------- */
 
+#ifdef SQISIGN_MLLL_INPUT_TRACK
+/* P4-A instrumentation. Compile-time gated. Single-threaded measurement
+ * runs only — no locking. Acceptance per PLAN_KO §Phase 4 P4-A. */
+static long  mlll_input_calls    = 0;
+static int   mlll_input_max_vec  = 0;
+static long  mlll_input_sum_vec  = 0;
+static int   mlll_input_max_g    = 0;
+static long  mlll_input_g_total  = 0;
+static int   mlll_input_atexit_done = 0;
+
+static void
+mlll_input_atexit_dump(void)
+{
+    if (mlll_input_calls == 0) return;
+    fprintf(stderr,
+            "[MLLL-INPUT-TRACK] calls=%ld vec_max=%d vec_avg=%ld "
+            "g_max=%d g_avg=%ld\n",
+            mlll_input_calls, mlll_input_max_vec,
+            mlll_input_sum_vec / mlll_input_calls,
+            mlll_input_max_g,
+            mlll_input_g_total / mlll_input_calls);
+}
+
+static void
+mlll_input_track(const ibz_vec_4_t *generators, int g)
+{
+    if (!mlll_input_atexit_done) {
+        atexit(mlll_input_atexit_dump);
+        mlll_input_atexit_done = 1;
+    }
+    int max_b = 0;
+    for (int i = 0; i < g; i++) {
+        for (int j = 0; j < 4; j++) {
+            int b = ibz_bitsize(&((generators[i])[j]));
+            if (b > max_b) max_b = b;
+        }
+    }
+    mlll_input_calls++;
+    mlll_input_sum_vec += max_b;
+    if (max_b > mlll_input_max_vec) mlll_input_max_vec = max_b;
+    if (g > mlll_input_max_g) mlll_input_max_g = g;
+    mlll_input_g_total += g;
+}
+#endif /* SQISIGN_MLLL_INPUT_TRACK */
+
 void
 quat_mlll_gram(ibz_mat_4x4_t *basis,
                int *rank,
@@ -835,6 +881,9 @@ quat_mlll_gram(ibz_mat_4x4_t *basis,
                int g,
                const quat_alg_t *alg)
 {
+#ifdef SQISIGN_MLLL_INPUT_TRACK
+    mlll_input_track(generators, g);
+#endif
     if (g_fp_mode) {
         quat_fp_widths_t widths;
         if (quat_fp_widths_from_alg(&widths, alg)) {
