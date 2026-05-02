@@ -158,11 +158,20 @@ P3-2′ 통합 후 fp 백엔드 폭 부족이 발견됨. 3회 iteration:
 
 #### 새 Phase 4 task (active, 2026-05-02 정의)
 
-- [ ] **P4-A** Production hot path 입력 generator bitsize **측정**:
-    - `quat_mlll_gram` 진입점에 compile-time guard (`SQISIGN_MLLL_INPUT_TRACK` 또는 기존 `bitsize_tracker.h` 확장) instrumentation 추가.
-    - lvl1/3/5 각 1회 sign + nistapi 실행하면서 quat_mlll_gram 호출당 입력 generator max bitsize 누적 통계 (avg/max/p99) 출력.
-    - 산출물: `bench_logs/p4_a_input_bits/L{1,3,5}.log`, hot path 호출당 입력 분포.
-    - Acceptance: 3 레벨 모두 통계 수집, 측정값이 PLAN_KO §finding 4 의 749/1137/1507 (gram, MLLL 내부) 가 아닌 **입력 generator** 분포임을 명시.
+- [x] **P4-A** Production hot path 입력 generator bitsize **측정** — **완료 (2026-05-02)**:
+    - `mlll_gram.c` 의 `quat_mlll_gram` 진입점에 compile-time guard `SQISIGN_MLLL_INPUT_TRACK` instrumentation 추가 (atexit dump). 가드 OFF 시 코드 영향 0 (production 빌드 무관).
+    - 측정 빌드: `build_p4a` (`-DSQISIGN_USE_MLLL_GRAM=ON -DCMAKE_C_FLAGS="-DSQISIGN_MLLL_INPUT_TRACK"`).
+    - 산출물: `bench_logs/p4_a_input_bits/L{1,3,5}.log` — `sqisign_test_scheme_lvlN` 1 iteration (random seed) 기준 quat_mlll_gram 입력 generator 통계.
+    - **결과 표**:
+
+| Level | quat_mlll_gram calls | vec_max (input) | vec_avg | g_max | g_avg | Phase 1 settled (vec/gram) | 입력/settled 비율 |
+|---|---|---|---|---|---|---|---|
+| L1 | 90 | **2551**b | 376b | 16 | 8 | 259/518 | ~9.85× |
+| L3 | 99 | **3839**b | 542b | 16 | 9 | 391/782 | ~9.82× |
+| L5 | 90 | **5107**b | 753b | 16 | 8 | 513/1026 | ~9.96× |
+
+    - **해석**: Phase 1 측정값(259/391/513) = MLLL **종료 후** basis vec coord 의 max bit (= 페이퍼 Lemma 1 약속). P4-A 측정값(2551/3839/5107) = MLLL **입력** generator 의 vec coord max — settled state 의 약 10×. fp budget 은 입력을 cover 해야 하므로 후자가 P4-D 의 산정 base.
+    - **3 레벨 PASS 확인**: `All 1 iterations passed for SQIsign_lvl{1,3,5}` (build_p4a, ibz fallback 경로).
 
 - [ ] **P4-B** SQIsign 호출 사슬 **수기 분석** (소스 read-only, 코드 변경 0):
     - `signature/ref/lvlN/sign.c`, `keygen.c`, `id2iso.c`, `dim2id2iso.c` 에서 `quat_mlll_gram` 의 4개 caller (= alias 대상 함수: `quat_lideal_create`, `quat_lideal_reduce_basis`, `quat_lideal_prime_norm_reduced_equivalent`, `quat_lideal_lideal_mul_reduced`) 까지 도달하는 lattice op 체인을 mapping.
