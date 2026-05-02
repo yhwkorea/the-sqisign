@@ -22,6 +22,7 @@ set(SOURCE_FILES_QUATERNION_GENERIC_REF_TESTS
     ../hnf/hnf_tests.c
     ../lll/lll_verification.c
     ../lll/lll_tests.c
+    ../lll/mlll_tests.c
 )
 add_executable(sqisign_test_quaternion ${SOURCE_FILES_QUATERNION_GENERIC_REF_TESTS} test_quaternions.c)
 target_link_libraries(sqisign_test_quaternion ${LIB_QUATERNION} ${GMP} sqisign_common_sys)
@@ -38,3 +39,14 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "MSAN")
 endif()
 
 set(BM_BINS ${BM_BINS} sqisign_bm_quaternion CACHE INTERNAL "List of benchmark executables")
+
+# Standalone MLLL test
+add_executable(sqisign_test_mlll ${SOURCE_FILES_QUATERNION_GENERIC_REF} ../lll/mlll_tests.c test_mlll_only.c)
+target_link_libraries(sqisign_test_mlll ${LIB_QUATERNION} ${GMP} sqisign_common_sys)
+target_include_directories(sqisign_test_mlll PRIVATE ../internal_quaternion_headers ${INC_COMMON} ${INC_QUATERNION} ${INC_PUBLIC} ${PROJECT_SOURCE_DIR}/src/mini-gmp)
+add_test(sqisign_test_mlll sqisign_test_mlll)
+
+# MLLL vs HNF benchmark
+add_executable(sqisign_bm_mlll ${SOURCE_FILES_QUATERNION_GENERIC_REF} ../lll/mlll_benchmark.c)
+target_link_libraries(sqisign_bm_mlll ${LIB_QUATERNION} ${GMP} sqisign_common_sys)
+target_include_directories(sqisign_bm_mlll PRIVATE ../internal_quaternion_headers ${INC_COMMON} ${INC_QUATERNION} ${INC_PUBLIC} ${PROJECT_SOURCE_DIR}/src/mini-gmp)

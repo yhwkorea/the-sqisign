@@ -1,5 +1,6 @@
 #include "hnf_internal.h"
 #include "internal.h"
+#include "bitsize_tracker.h"
 
 // HNF test function
 int
@@ -145,6 +146,7 @@ ibz_mat_4xn_hnf_mod_core(ibz_mat_4x4_t *hnf, int generator_number, const ibz_vec
     }
     assert(ibz_cmp(mod, &ibz_const_zero) > 0);
     ibz_copy(&m, mod);
+    tracker_update_ibz(&m); /* track initial mod (det) */
     while (i != -1) {
         while (j != 0) {
             j = j - 1;
@@ -153,12 +155,15 @@ ibz_mat_4xn_hnf_mod_core(ibz_mat_4x4_t *hnf, int generator_number, const ibz_vec
                 // value is needed here also, needs u non 0, but v can be 0 if needed
                 ibz_xgcd_with_u_not_0(&d, &u, &v, &(a[k][i]), &(a[j][i]));
                 ibz_vec_4_linear_combination(&c, &u, &(a[k]), &v, &(a[j]));
+                tracker_update_vec4(&c); /* track pre-mod intermediate */
                 ibz_div(&coeff_1, &r, &(a[k][i]), &d);
                 ibz_div(&coeff_2, &r, &(a[j][i]), &d);
                 ibz_neg(&coeff_2, &coeff_2);
                 ibz_vec_4_linear_combination_mod(
                     &(a[j]), &coeff_1, &(a[j]), &coeff_2, &(a[k]), &m); // do lin comb mod m
+                tracker_update_vec4(&(a[j])); /* track post-mod intermediate */
                 ibz_vec_4_copy_mod(&(a[k]), &c, &m);                    // mod m in copy
+                tracker_update_vec4(&(a[k])); /* track post-mod intermediate */
             }
         }
         ibz_xgcd_with_u_not_0(&d, &u, &v, &(a[k][i]), &m);
@@ -170,6 +175,7 @@ ibz_mat_4xn_hnf_mod_core(ibz_mat_4x4_t *hnf, int generator_number, const ibz_vec
             ibz_div_floor(&q, &r, &(w[h][i]), &(w[i][i]));
             ibz_neg(&q, &q);
             ibz_vec_4_linear_combination(&(w[h]), &ibz_const_one, &(w[h]), &q, &(w[i]));
+            tracker_update_vec4(&(w[h])); /* track w intermediate */
         }
         ibz_div(&m, &r, &m, &d);
         assert(ibz_is_zero(&r));
