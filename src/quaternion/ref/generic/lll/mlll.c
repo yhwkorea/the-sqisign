@@ -1,16 +1,22 @@
 /**
  * @file mlll.c
- * @brief Modified LLL (MLLL) — Compact paper Algorithm 1
+ * @brief Modified LLL (MLLL) algorithm — exact integer d/λ version
  *
- * Integral GSO (Cohen 2.6.3): d[k], Lambda[i][j] — all integer, no fractions.
- *   d[0] = 1
- *   Lambda[i][j] = d[j+1] * mu[i][j]  (integer)
- *   d[k+1] = d[k] * B[k]              (integer)
- * Vector coordinates b[i] stay bounded by max ||a_i||^2 (Lemma 3).
+ * Pohst (1987) MLLL with exact integer d[] and λ[][] (Cohen 2.6.7 style).
+ * Gram matrix is exact integer, incrementally updated during size-reduce/swap.
+ * After each swap, d/lam are recomputed from scratch for robustness.
+ *
+ * - Vector coordinates b[i]: ibz_t (Lemma 1 bounded)
+ * - Gram matrix G[i][j] = <b[i], b[j]>: ibz_t (exact)
+ * - d[k]: Gram determinant of b[0..k-1], ibz_t (exact)
+ * - lam[i][j] = d[j+1]*μ[i][j]: ibz_t (exact)
+ * - Dependency detection: d[k+1] == 0 (exact integer test)
+ *
+ * No HNF post-processing needed — dependent vectors are eliminated through
+ * exact size-reduction and swaps.
  */
 
 #include <quaternion.h>
-#include <stdio.h>
 #include "internal.h"
 #include "lll_internals.h"
 #include "mlll_internals.h"
@@ -18,13 +24,13 @@
 
 #define N MLLL_MAX_GENERATORS
 
+/* Access symmetric Gram entry: G[max(i,j)][min(i,j)] */
+#define GRAM(G, i, j) ((i) < (j) ? &(G)[(j)][(i)] : &(G)[(i)][(j)])
+
 /* ---------- helpers ---------- */
 
-/* Quaternion norm bilinear form: <a,b> = a0*b0 + a1*b1 + p*a2*b2 + p*a3*b3
- * This matches quat_lll_bilinear used by the existing LLL and verification. */
 static void
-ibz_vec_4_dot(ibz_t *dot, const ibz_vec_4_t *a, const ibz_vec_4_t *b,
-              const ibz_t *p)
+ibz_vec_4_dot_quat(ibz_t *dot, const ibz_vec_4_t *a, const ibz_vec_4_t *b, const ibz_t *p)
 {
     ibz_t tmp;
     ibz_init(&tmp);
@@ -57,92 +63,151 @@ ibz_vec_4_swap(ibz_vec_4_t *a, ibz_vec_4_t *b)
         ibz_swap(&((*a)[i]), &((*b)[i]));
 }
 
-/* (no row_gcd_reduce / B_reduce needed — integral GSO uses only integers) */
+/* ---------- Gram matrix operations ---------- */
 
-/* ========== Bitsize tracking (temporary) ========== */
-
-static int max_bits_vec = 0;
-static int max_bits_d = 0;
-static int max_bits_lambda = 0;
-static int max_bits_intermediate = 0;
-static int mlll_call_count = 0;
-
-static inline void track_intermediate(const ibz_t *v) {
-    int b = ibz_bitsize(v);
-    if (b > max_bits_intermediate) max_bits_intermediate = b;
-    tracker_update_gso_ibz(v);
+static void
+gram_compute_row(int idx, int beta, ibz_t G[][N],
+                 const ibz_vec_4_t *b, const ibz_t *p)
+{
+    (void)beta;
+    for (int j = 0; j <= idx; j++)
+        ibz_vec_4_dot_quat(&G[idx][j], &b[idx], &b[j], p);
 }
-
-void mlll_print_max_bits(void) {
-    fprintf(stderr, "[MLLL bitsize] calls=%d  vec=%d bits (%d u64)  "
-            "d=%d bits (%d u64)  lambda=%d bits (%d u64)  "
-            "intermediate=%d bits (%d u64)\n",
-            mlll_call_count,
-            max_bits_vec, (max_bits_vec + 63) / 64,
-            max_bits_d, (max_bits_d + 63) / 64,
-            max_bits_lambda, (max_bits_lambda + 63) / 64,
-            max_bits_intermediate, (max_bits_intermediate + 63) / 64);
-}
-
-/* ========== Integral GSO row computation (Cohen 2.6.3) ========== */
 
 /**
- * @brief Compute Lambda[idx][j] for j < idx, and d[idx+1].
+ * @brief Update Gram matrix after b[k] -= X * b[l]
  *
- * Cohen's Algorithm 2.6.3 (integral GSO, incremental update):
- *   d[0] = 1,  d[k] = det(Gram of b[0]..b[k-1])
- *   Lambda[i][j] = d[j+1] * mu[i][j]  (integer)
- *
- * The Lambda and d values are computed incrementally:
- *   Lambda[idx][j] starts as <b[idx], b[j]>, then transformed for k=0..j-1
- *   d[idx+1] starts as <b[idx], b[idx]>, then updated for each j
- *
- * d[idx+1] = 0 means b[idx] is linearly dependent on b[0]..b[idx-1].
+ * Two-step update: G[k][k] -= X*G[k][l], then G[k][j] -= X*G[l][j] for all j.
+ * Since l < k, the G[k][l] entry is updated before G[k][k] in the loop,
+ * yielding the correct result: G[k][k] = old - 2X*G[k][l] + X²*G[l][l].
  */
 static void
-compute_gso_row(int idx, const ibz_vec_4_t *b,
-                ibz_t Lambda[][N], ibz_t d[], const ibz_t *p)
+gram_size_reduce(int k, int l, const ibz_t *X, int beta,
+                 ibz_t G[][N])
 {
-    ibz_t tmp, prod, rem;
-    ibz_init(&tmp); ibz_init(&prod); ibz_init(&rem);
+    ibz_t tmp;
+    ibz_init(&tmp);
 
-    /* d[idx+1] starts as <b[idx], b[idx]> */
-    ibz_vec_4_dot(&d[idx + 1], &b[idx], &b[idx], p);
-    track_intermediate(&d[idx + 1]);
+    ibz_mul(&tmp, X, GRAM(G, k, l));
+    ibz_sub(&G[k][k], &G[k][k], &tmp);
 
-    for (int j = 0; j < idx; j++) {
-        /* Lambda[idx][j] starts as <b[idx], b[j]> */
-        ibz_vec_4_dot(&Lambda[idx][j], &b[idx], &b[j], p);
-
-        /* Transform: Lambda[idx][j] = (d[k+1]*Lambda[idx][j] - Lambda[idx][k]*Lambda[j][k]) / d[k]
-         * for k = 0 to j-1 */
-        for (int k = 0; k < j; k++) {
-            ibz_mul(&tmp, &d[k + 1], &Lambda[idx][j]);
-            ibz_mul(&prod, &Lambda[idx][k], &Lambda[j][k]);
-            ibz_sub(&tmp, &tmp, &prod);
-            track_intermediate(&tmp);
-            ibz_div(&Lambda[idx][j], &rem, &tmp, &d[k]);
-            assert(ibz_is_zero(&rem));
-        }
-        track_intermediate(&Lambda[idx][j]);
-
-        /* Update d[idx+1] = (d[j+1]*d[idx+1] - Lambda[idx][j]^2) / d[j] */
-        if (!ibz_is_zero(&d[j])) {
-            ibz_mul(&tmp, &d[j + 1], &d[idx + 1]);
-            ibz_mul(&prod, &Lambda[idx][j], &Lambda[idx][j]);
-            ibz_sub(&tmp, &tmp, &prod);
-            track_intermediate(&tmp);
-            ibz_div(&d[idx + 1], &rem, &tmp, &d[j]);
-            assert(ibz_is_zero(&rem));
-        }
-        /* If d[j]=0, b[j] was dependent — shouldn't happen if b[0..idx-1] are independent */
-        track_intermediate(&d[idx + 1]);
+    for (int j = 0; j < beta; j++) {
+        ibz_mul(&tmp, X, GRAM(G, l, j));
+        ibz_sub(GRAM(G, k, j), GRAM(G, k, j), &tmp);
     }
 
-    ibz_finalize(&tmp); ibz_finalize(&prod); ibz_finalize(&rem);
+    ibz_finalize(&tmp);
 }
 
-/* ========== MLLL core (integral GSO) ========== */
+static void
+gram_swap(int k, int beta, ibz_t G[][N])
+{
+    for (int j = 0; j < beta; j++) {
+        if (j == k || j == k - 1)
+            continue;
+        ibz_swap(GRAM(G, k, j), GRAM(G, k - 1, j));
+    }
+    ibz_swap(&G[k][k], &G[k - 1][k - 1]);
+}
+
+/* ---------- exact integer helpers ---------- */
+
+/**
+ * @brief Nearest-integer division: q = round(a/b)
+ */
+static void
+rounded_div(ibz_t *q, const ibz_t *a, const ibz_t *b)
+{
+    ibz_t r, sign_q, abs_b;
+    ibz_init(&r);
+    ibz_init(&sign_q);
+    ibz_init(&abs_b);
+
+    ibz_abs(&abs_b, b);
+    ibz_mul(&sign_q, a, b);
+    ibz_div(q, &r, a, b);
+    ibz_abs(&r, &r);
+    ibz_add(&r, &r, &r);
+    ibz_set(&sign_q,
+            (1 - 2 * (ibz_cmp(&sign_q, &ibz_const_zero) < 0)) *
+            (ibz_cmp(&r, &abs_b) > 0));
+    ibz_add(q, q, &sign_q);
+
+    ibz_finalize(&r);
+    ibz_finalize(&sign_q);
+    ibz_finalize(&abs_b);
+}
+
+/**
+ * @brief Exact integer division: q = a/b (asserts remainder == 0)
+ */
+static void
+exact_div(ibz_t *q, const ibz_t *a, const ibz_t *b)
+{
+    ibz_t r;
+    ibz_init(&r);
+    ibz_div(q, &r, a, b);
+    assert(ibz_is_zero(&r));
+    ibz_finalize(&r);
+}
+
+/**
+ * @brief Compute lam[k][0..k-1] and d[k+1] from Gram matrix.
+ *
+ * Cohen Algorithm 2.6.3 recurrence. When d[s] = 0 (R-dependent vectors),
+ * the numerator is provably also 0 — we handle this by setting num = 0.
+ */
+static void
+compute_lam_d_row(int k, ibz_t G[][N], ibz_t lam[][N], ibz_t *d)
+{
+    ibz_t num, t1, t2;
+    ibz_init(&num);
+    ibz_init(&t1);
+    ibz_init(&t2);
+
+    for (int j = 0; j <= k; j++) {
+        ibz_copy(&num, GRAM(G, k, j));
+
+        for (int s = 0; s < j; s++) {
+            ibz_mul(&t1, &d[s + 1], &num);
+            if (j < k)
+                ibz_mul(&t2, &lam[k][s], &lam[j][s]);
+            else
+                ibz_mul(&t2, &lam[k][s], &lam[k][s]);
+            ibz_sub(&t1, &t1, &t2);
+
+            if (ibz_is_zero(&d[s])) {
+                /* d[s]=0: vectors 0..s-1 are R-dependent.
+                 * By algebraic structure, numerator is also 0. */
+                ibz_set(&num, 0);
+            } else {
+                exact_div(&num, &t1, &d[s]);
+            }
+        }
+
+        if (j < k)
+            ibz_copy(&lam[k][j], &num);
+        else
+            ibz_copy(&d[k + 1], &num);
+    }
+
+    ibz_finalize(&num);
+    ibz_finalize(&t1);
+    ibz_finalize(&t2);
+}
+
+/**
+ * @brief Recompute all d[] and lam[][] from scratch using current Gram matrix.
+ */
+static void
+recompute_all_lam_d(int beta, ibz_t G[][N], ibz_t lam[][N], ibz_t *d)
+{
+    ibz_set(&d[0], 1);
+    for (int k = 0; k < beta; k++)
+        compute_lam_d_row(k, G, lam, d);
+}
+
+/* ========== MLLL core ========== */
 
 void
 quat_mlll(ibz_mat_4x4_t *basis,
@@ -154,280 +219,190 @@ quat_mlll(ibz_mat_4x4_t *basis,
     assert(g >= 1 && g <= N);
 
     ibz_vec_4_t b[N];
-    ibz_t Lambda[N][N];  /* Lambda[i][j] = d[j+1] * mu[i][j], integer */
-    ibz_t d[N + 1];      /* d[0]=1, d[k+1] = d[k]*B[k], integer */
+    ibz_t G[N][N];      /* Gram matrix (lower triangular, exact) */
+    ibz_t d[N + 1];     /* d[0]=1, d[k+1] = det(Gram(b[0..k])) */
+    ibz_t lam[N][N];    /* lam[i][j] = d[j+1]*μ[i][j], j < i */
 
     for (int i = 0; i < g; i++) {
         ibz_vec_4_init(&b[i]);
-        for (int j = 0; j < g; j++)
-            ibz_init(&Lambda[i][j]);
+        for (int j = 0; j < g; j++) {
+            ibz_init(&G[i][j]);
+            ibz_init(&lam[i][j]);
+        }
     }
-    for (int i = 0; i <= g; i++) {
+    for (int i = 0; i <= g; i++)
         ibz_init(&d[i]);
-    }
     ibz_set(&d[0], 1);
 
-    ibz_t t, tmp1, tmp2, rem;
-    ibz_init(&t);
-    ibz_init(&tmp1);
+    ibz_t X, tmp, tmp2;
+    ibz_init(&X);
+    ibz_init(&tmp);
     ibz_init(&tmp2);
-    ibz_init(&rem);
 
-    int alpha = 0, beta = 0, tau = 2, m, l;
+    int alpha = 0, beta = 0, tau = 1, m, l;
 
     /* ===== LOAD ===== */
 load:
-    if (alpha >= g)
-        goto start_reduce;
+    while (alpha < g) {
+        if (ibz_vec_4_is_zero(&generators[alpha])) {
+            alpha++;
+            continue;
+        }
 
-    while (alpha < g && ibz_vec_4_is_zero(&generators[alpha]))
+        for (int i = 0; i < 4; i++)
+            ibz_copy(&(b[beta][i]), &(generators[alpha][i]));
         alpha++;
-    if (alpha >= g)
-        goto start_reduce;
 
-    for (int i = 0; i < 4; i++)
-        ibz_copy(&(b[beta][i]), &(generators[alpha][i]));
-    alpha++;
+        /* Compute Gram row for new vector */
+        gram_compute_row(beta, beta + 1, G, b, &alg->p);
+        beta++;
 
-    compute_gso_row(beta, b, Lambda, d, &alg->p);
-    beta++;
+        /* Recompute ALL d/lam from scratch (handles stale values from
+         * prior flagg=1 swaps and natural R-dependencies) */
+        recompute_all_lam_d(beta, G, lam, d);
 
-    if (!ibz_is_zero(&d[beta]) && alpha < g)
-        goto load;
+        if (!ibz_is_zero(&d[beta]) && alpha < g)
+            continue;   /* independent vector, load more */
 
-start_reduce:
+        break;  /* dependent or last generator → reduce */
+    }
+
     if (beta <= 1)
         goto done;
 
     m = tau;
-    if (m > beta)
-        m = beta;
-    if (m < 2)
-        m = 2;
+    if (m >= beta)
+        m = beta - 1;
+    if (m < 1)
+        m = 1;
 
-    /* ===== REDUCTION (1-indexed m, 0-indexed arrays) ===== */
+    /* ===== REDUCTION ===== */
 reduction:
-    /* Recompute GSO from 0 to m-1 to ensure all Lambda/d are fresh.
-     * Necessary because swaps (both Lovász and dependent-vector) can leave
-     * d values stale. Safe because b[0]..b[m-2] are always independent
-     * (dependent vectors are at position m-1, not earlier).
-     * Cost: O(m^3) per step, acceptable for dimension 4 / beta ≤ 16. */
-    ibz_set(&d[0], 1);
-    for (int _i = 0; _i < m; _i++)
-        compute_gso_row(_i, b, Lambda, d, &alg->p);
-
     l = m - 1;
 
 size_reduce:
-    /* |mu[m][l]| > 1/2 ?
-     * mu[m-1][l-1] = Lambda[m-1][l-1] / d[l]
-     * |Lambda[m-1][l-1]| * 2 > d[l] ?
-     */
-    if (l >= 1 && !ibz_is_zero(&d[l])) {
-        ibz_abs(&tmp1, &Lambda[m - 1][l - 1]);
-        ibz_add(&tmp1, &tmp1, &tmp1);
-        if (ibz_cmp(&tmp1, &d[l]) > 0) {
-            /* t = round(Lambda[m-1][l-1] / d[l]) */
-            ibz_add(&tmp1, &Lambda[m - 1][l - 1], &Lambda[m - 1][l - 1]);
-            ibz_add(&tmp1, &tmp1, &d[l]);
-            ibz_add(&tmp2, &d[l], &d[l]);
-            ibz_div_floor(&t, &tmp1, &tmp1, &tmp2);
+    /* REDI(m, l): exact size-reduce b[m] against b[l] */
+    if (l >= 0 && !ibz_is_zero(&d[l + 1])) {
+        /* Check |2*lam[m][l]| > d[l+1] */
+        ibz_add(&tmp, &lam[m][l], &lam[m][l]);
+        ibz_abs(&tmp, &tmp);
+        if (ibz_cmp(&tmp, &d[l + 1]) > 0) {
+            rounded_div(&X, &lam[m][l], &d[l + 1]);
 
-            if (!ibz_is_zero(&t)) {
-                /* b[m-1] -= t * b[l-1] */
-                ibz_vec_4_sub_scalar_mul(&b[m - 1], &t, &b[l - 1]);
-                tracker_update_vec4(&b[m - 1]);
+            if (!ibz_is_zero(&X)) {
+                /* b[m] -= X * b[l] */
+                ibz_vec_4_sub_scalar_mul(&b[m], &X, &b[l]);
+                tracker_update_vec4(&b[m]);
 
-                /* Lambda[m-1][j] -= t * Lambda[l-1][j]  for j < l-1 */
-                for (int j = 0; j < l - 1; j++) {
-                    ibz_mul(&tmp1, &t, &Lambda[l - 1][j]);
-                    track_intermediate(&tmp1);
-                    ibz_sub(&Lambda[m - 1][j], &Lambda[m - 1][j], &tmp1);
-                    track_intermediate(&Lambda[m - 1][j]);
+                /* Update Gram matrix */
+                gram_size_reduce(m, l, &X, beta, G);
+
+                /* Update lam: lam[m][l] -= X*d[l+1], lam[m][j] -= X*lam[l][j] */
+                ibz_mul(&tmp, &X, &d[l + 1]);
+                ibz_sub(&lam[m][l], &lam[m][l], &tmp);
+                for (int j = 0; j < l; j++) {
+                    ibz_mul(&tmp, &X, &lam[l][j]);
+                    ibz_sub(&lam[m][j], &lam[m][j], &tmp);
                 }
-
-                /* Lambda[m-1][l-1] -= t * d[l] */
-                ibz_mul(&tmp1, &t, &d[l]);
-                track_intermediate(&tmp1);
-                ibz_sub(&Lambda[m - 1][l - 1], &Lambda[m - 1][l - 1], &tmp1);
-                track_intermediate(&Lambda[m - 1][l - 1]);
             }
         }
     }
 
-    /* Zero vector: remove immediately */
-    if (ibz_vec_4_is_zero(&b[m - 1]))
+    if (ibz_vec_4_is_zero(&b[m]))
         goto remove_vector;
 
-    /* Real-dependent but nonzero (d[m]=0, b[m-1]≠0):
-     * b[m-1] is in the real span of b[0]..b[m-2] but NOT the integer span.
-     * Swap it down one position. The next reduction iteration recomputes GSO
-     * at the new position, where the vector may become independent or
-     * continue swapping until it reaches position 1 and size-reduction
-     * zeros it out (Euclidean-algorithm-like convergence). */
-    if (ibz_is_zero(&d[m])) {
-        if (m >= 2) {
-            ibz_vec_4_swap(&b[m - 1], &b[m - 2]);
-            if (m > 2)
-                m = m - 1;
-        }
-        goto reduction;
-    }
-
-    if (l < m - 1)
-        goto next_l;
-
-    /* Lovász condition (integral form, Cohen 2.6.3):
-     * For 0-based vectors (m-2, m-1):
-     *   4*(d[m]*d[m-2] + Lambda[m-1][m-2]^2) < 3*d[m-1]^2
-     */
-    if (m >= 2 && !ibz_is_zero(&d[m - 1])) {
-        ibz_t lhs, rhs, lam_sq;
-        ibz_init(&lhs); ibz_init(&rhs); ibz_init(&lam_sq);
-
-        /* LHS = 4 * (d[m] * d[m-2] + Lambda[m-1][m-2]^2) */
-        ibz_mul(&lhs, &d[m], &d[m - 2]);
-        ibz_mul(&lam_sq, &Lambda[m - 1][m - 2], &Lambda[m - 1][m - 2]);
-        track_intermediate(&lam_sq);
-        ibz_add(&lhs, &lhs, &lam_sq);
-        ibz_add(&lhs, &lhs, &lhs);
-        ibz_add(&lhs, &lhs, &lhs);  /* *4 */
-        track_intermediate(&lhs);
-
-        /* RHS = 3 * d[m-1]^2 */
-        ibz_mul(&rhs, &d[m - 1], &d[m - 1]);
-        ibz_mul(&tmp1, &rhs, &ibz_const_three);
-        track_intermediate(&tmp1);
-
-        int need_swap = (ibz_cmp(&lhs, &tmp1) < 0);
-
-        ibz_finalize(&lhs); ibz_finalize(&rhs); ibz_finalize(&lam_sq);
-
-        if (need_swap)
-            goto do_swap;
-    }
-
-next_l:
-    l = l - 1;
-    if (l >= 1)
+    l--;
+    if (l >= 0)
         goto size_reduce;
-    m = m + 1;
-    if (m > beta) {
+
+    /* === All size-reductions for b[m] done. Check swap conditions. === */
+
+    /* Case 1: d[m+1]=0 — dependent vector (Matthews D_k=0).
+     * Force swap to cascade dependent vector toward position 1,
+     * where REDI against a shorter vector can eliminate it.
+     * Must bypass tau barrier (unlike Lovász swaps). */
+    if (ibz_is_zero(&d[m + 1]))
+        goto do_swap_dep;
+
+    /* Case 2: Lovász condition.
+     * Swap if 4*(d[m-1]*d[m+1] + lam[m][m-1]²) < 3*d[m]² */
+    ibz_mul(&tmp, &d[m - 1], &d[m + 1]);
+    ibz_mul(&tmp2, &lam[m][m - 1], &lam[m][m - 1]);
+    ibz_add(&tmp, &tmp, &tmp2);
+    ibz_add(&tmp, &tmp, &tmp);    /* ×2 */
+    ibz_add(&tmp, &tmp, &tmp);    /* ×4 */
+
+    ibz_mul(&tmp2, &d[m], &d[m]);
+    ibz_mul(&tmp2, &tmp2, &ibz_const_three);
+
+    if (ibz_cmp(&tmp, &tmp2) < 0)
+        goto do_swap_lov;
+
+    m++;
+    if (m >= beta) {
         if (alpha < g) {
-            tau = m;
+            tau = beta;
             goto load;
         }
         goto done;
     }
     goto reduction;
 
-    /* ===== SWAP (NTL-style incremental update) ===== */
-do_swap:
-    {
-        /* 0-based: swap b[k] and b[k-1], where k = m-1 */
-        int k = m - 1;
-        ibz_t lam, t1_s, t2_s, tmp_a, tmp_b;
-        ibz_init(&lam); ibz_init(&t1_s); ibz_init(&t2_s);
-        ibz_init(&tmp_a); ibz_init(&tmp_b);
+    /* ===== SWAP (dependent vector) ===== */
+do_swap_dep:
+    ibz_vec_4_swap(&b[m], &b[m - 1]);
+    tracker_update_vec4(&b[m]);
+    tracker_update_vec4(&b[m - 1]);
+    gram_swap(m, beta, G);
+    recompute_all_lam_d(beta, G, lam, d);
+    if (m > 1)
+        m--;
+    goto reduction;
 
-        ibz_copy(&lam, &Lambda[k][k - 1]);
-
-        /* Update Lambda[i][k-1] and Lambda[i][k] for i > k */
-        for (int i = k + 1; i < beta; i++) {
-            /* t1 = (Lambda[i][k-1]*lam + Lambda[i][k]*d[k-1]) / d[k] */
-            ibz_mul(&tmp_a, &Lambda[i][k - 1], &lam);
-            ibz_mul(&tmp_b, &Lambda[i][k], &d[k - 1]);
-            ibz_add(&tmp_a, &tmp_a, &tmp_b);
-            track_intermediate(&tmp_a);
-            ibz_div(&t1_s, &rem, &tmp_a, &d[k]);
-            assert(ibz_is_zero(&rem));
-
-            /* t2 = (Lambda[i][k-1]*d[k+1] - Lambda[i][k]*lam) / d[k] */
-            ibz_mul(&tmp_a, &Lambda[i][k - 1], &d[k + 1]);
-            ibz_mul(&tmp_b, &Lambda[i][k], &lam);
-            ibz_sub(&tmp_a, &tmp_a, &tmp_b);
-            track_intermediate(&tmp_a);
-            ibz_div(&t2_s, &rem, &tmp_a, &d[k]);
-            assert(ibz_is_zero(&rem));
-
-            ibz_copy(&Lambda[i][k - 1], &t1_s);
-            ibz_copy(&Lambda[i][k], &t2_s);
-            track_intermediate(&Lambda[i][k - 1]);
-            track_intermediate(&Lambda[i][k]);
-        }
-
-        /* Swap Lambda[k][j] and Lambda[k-1][j] for j < k-1 */
-        for (int j = 0; j < k - 1; j++)
-            ibz_swap(&Lambda[k][j], &Lambda[k - 1][j]);
-
-        /* d[k]_new = (d[k+1]*d[k-1] + lam^2) / d[k]_old */
-        ibz_mul(&tmp_a, &d[k + 1], &d[k - 1]);
-        ibz_mul(&tmp_b, &lam, &lam);
-        ibz_add(&tmp_a, &tmp_a, &tmp_b);
-        ibz_div(&d[k], &rem, &tmp_a, &d[k]);
-        assert(ibz_is_zero(&rem));
-        track_intermediate(&d[k]);
-
-        /* Swap the vectors */
-        ibz_vec_4_swap(&b[k], &b[k - 1]);
-        tracker_update_vec4(&b[k]);
-        tracker_update_vec4(&b[k - 1]);
-
-        ibz_finalize(&lam); ibz_finalize(&t1_s); ibz_finalize(&t2_s);
-        ibz_finalize(&tmp_a); ibz_finalize(&tmp_b);
-    }
-
-    if (m > 2)
-        m = m - 1;
+    /* ===== SWAP (Lovász) ===== */
+do_swap_lov:
+    ibz_vec_4_swap(&b[m], &b[m - 1]);
+    tracker_update_vec4(&b[m]);
+    tracker_update_vec4(&b[m - 1]);
+    gram_swap(m, beta, G);
+    recompute_all_lam_d(beta, G, lam, d);
+    if (m > tau)
+        m--;
     goto reduction;
 
     /* ===== REMOVE ===== */
 remove_vector:
-    for (int i = m; i <= beta - 1; i++) {
+    /* Shift b[] down from position m */
+    for (int i = m; i < beta - 1; i++) {
         for (int c = 0; c < 4; c++)
-            ibz_copy(&(b[i - 1][c]), &(b[i][c]));
+            ibz_copy(&(b[i][c]), &(b[i + 1][c]));
     }
     beta--;
 
+    /* Recompute Gram for shifted positions */
+    for (int i = m; i < beta; i++)
+        gram_compute_row(i, beta, G, b, &alg->p);
+
+    /* Recompute all d/lam from scratch */
+    recompute_all_lam_d(beta, G, lam, d);
+
     if (alpha >= g) {
+        /* All generators loaded. Re-run reduction from m=1 to
+         * ensure full LLL-reducedness after forced-swap cascades. */
         if (beta <= 1)
             goto done;
-        ibz_set(&d[0], 1);
-        for (int i = 0; i < beta; i++)
-            compute_gso_row(i, b, Lambda, d, &alg->p);
-        m = 2;
-        if (m > beta)
-            goto done;
+        m = 1;
         goto reduction;
     }
 
-    ibz_set(&d[0], 1);
-    for (int i = 0; i < beta; i++)
-        compute_gso_row(i, b, Lambda, d, &alg->p);
-    tau = m;
-    if (tau < 2)
-        tau = 2;
+    tau = m + 1;
+    if (tau < 1)
+        tau = 1;
     goto load;
 
 done:
+    /* Stop tracking: reduction loop is done */
     tracker_disable();
-
-    /* Track bitsizes */
-    mlll_call_count++;
-    for (int i = 0; i < beta; i++) {
-        for (int c = 0; c < 4; c++) {
-            int bs = ibz_bitsize(&(b[i][c]));
-            if (bs > max_bits_vec) max_bits_vec = bs;
-        }
-        for (int j = 0; j < i; j++) {
-            int bs = ibz_bitsize(&Lambda[i][j]);
-            if (bs > max_bits_lambda) max_bits_lambda = bs;
-        }
-    }
-    for (int i = 0; i <= beta; i++) {
-        int bs = ibz_bitsize(&d[i]);
-        if (bs > max_bits_d) max_bits_d = bs;
-    }
 
     /* Extract result */
     *rank = 0;
@@ -446,15 +421,16 @@ done:
     /* Cleanup */
     for (int i = 0; i < g; i++) {
         ibz_vec_4_finalize(&b[i]);
-        for (int j = 0; j < g; j++)
-            ibz_finalize(&Lambda[i][j]);
+        for (int j = 0; j < g; j++) {
+            ibz_finalize(&G[i][j]);
+            ibz_finalize(&lam[i][j]);
+        }
     }
     for (int i = 0; i <= g; i++)
         ibz_finalize(&d[i]);
-    ibz_finalize(&t);
-    ibz_finalize(&tmp1);
+    ibz_finalize(&X);
+    ibz_finalize(&tmp);
     ibz_finalize(&tmp2);
-    ibz_finalize(&rem);
 }
 
 /* ========== Lattice operations using MLLL ========== */
@@ -465,13 +441,6 @@ quat_lattice_mul_mlll(quat_lattice_t *res,
                       const quat_lattice_t *lat2,
                       const quat_alg_t *alg)
 {
-    /* Compact paper Algorithm 2: CompactIdealMultiplication
-     * 1. Multiply out denominators so all vectors are integer
-     * 2. LLL-reduce each basis
-     * 3. Form 16 products (integer quaternion multiplication)
-     * 4. MLLL on integer generators
-     * 5. Result denominator = r1 * r2
-     */
     ibz_vec_4_t elem1, elem2, elem_res;
     ibz_vec_4_t generators[16];
     int rank;
@@ -482,47 +451,26 @@ quat_lattice_mul_mlll(quat_lattice_t *res,
     for (int i = 0; i < 16; i++)
         ibz_vec_4_init(&generators[i]);
 
-    /* Step 1-2: Multiply out denominators (r1=lat1->denom, r2=lat2->denom)
-     * and LLL-reduce each basis.
-     * quat_lattice_lll takes a lattice (basis+denom) and returns LLL-reduced basis.
-     * The basis already includes the denom scaling implicitly,
-     * so the reduced basis columns are integer coordinates with denom factored in.
-     */
-    ibz_mat_4x4_t red1, red2;
-    ibz_mat_4x4_init(&red1);
-    ibz_mat_4x4_init(&red2);
-
-    quat_lattice_lll(&red1, lat1, alg);
-    quat_lattice_lll(&red2, lat2, alg);
-
-    /* Step 3: M = (alpha_i * beta_j) for 1<=i,j<=4
-     * red1/red2 columns are the LLL-reduced bases (integer coords, denom separate).
-     * We use the integer coordinates directly — denom is handled at the end.
-     */
     for (int k = 0; k < 4; k++) {
         ibz_vec_4_copy_ibz(
-            &elem1, &(red1[0][k]), &(red1[1][k]),
-            &(red1[2][k]), &(red1[3][k]));
+            &elem1, &(lat1->basis[0][k]), &(lat1->basis[1][k]),
+            &(lat1->basis[2][k]), &(lat1->basis[3][k]));
         for (int i = 0; i < 4; i++) {
             ibz_vec_4_copy_ibz(
-                &elem2, &(red2[0][i]), &(red2[1][i]),
-                &(red2[2][i]), &(red2[3][i]));
+                &elem2, &(lat2->basis[0][i]), &(lat2->basis[1][i]),
+                &(lat2->basis[2][i]), &(lat2->basis[3][i]));
             quat_alg_coord_mul(&elem_res, &elem1, &elem2, alg);
             for (int j = 0; j < 4; j++)
                 ibz_copy(&(generators[4 * k + i][j]), &(elem_res[j]));
         }
     }
 
-    /* Step 4: MLLL on integer generators */
     quat_mlll(&(res->basis), &rank, generators, 16, alg);
     assert(rank == 4);
 
-    /* Step 5: Result denominator = r1 * r2 */
     ibz_mul(&(res->denom), &(lat1->denom), &(lat2->denom));
     quat_lattice_reduce_denom(res, res);
 
-    ibz_mat_4x4_finalize(&red1);
-    ibz_mat_4x4_finalize(&red2);
     ibz_vec_4_finalize(&elem1);
     ibz_vec_4_finalize(&elem2);
     ibz_vec_4_finalize(&elem_res);

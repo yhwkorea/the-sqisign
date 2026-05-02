@@ -176,19 +176,10 @@ int main(int argc, char *argv[]) {
 
     randombytes_init((unsigned char *)seed, NULL, 256);
 
-    int iterations = 1;
-    for (int i = 0; i < iterations; i++) {
-        printf("\n--- Iteration %d/%d ---\n", i + 1, iterations);
-        res = test_sqisign(msglen);
-        if (res != 0) {
-            printf("test failed at iteration %d for %s\n", i + 1, CRYPTO_ALGNAME);
-            return res;
-        }
+    res = test_sqisign(msglen);
+
+    if (res != 0) {
+        printf("test failed for %s\n", argv[1]);
     }
-    printf("\nAll %d iterations passed for %s\n", iterations, CRYPTO_ALGNAME);
-
-    extern void mlll_print_max_bits(void);
-    mlll_print_max_bits();
-
-    return 0;
+    return res;
 }
