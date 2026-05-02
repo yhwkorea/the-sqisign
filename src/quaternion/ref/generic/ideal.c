@@ -1,9 +1,6 @@
 #include <quaternion.h>
-#include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 #include "internal.h"
-#include "internal_quaternion_headers/mlll_internals.h"
 
 // assumes parent order and lattice correctly set, computes and sets the norm
 void
@@ -225,37 +222,7 @@ quat_lideal_right_transporter(quat_lattice_t *trans,
     quat_lattice_t inv;
     quat_lattice_init(&inv);
     quat_lideal_inverse_lattice_without_hnf(&inv, lideal1, alg);
-
-    /* Instrumented: run both HNF and MLLL, compare, log times */
-    static int call_count = 0;
-    call_count++;
-
-    struct timespec t0, t1, t2;
-    clock_gettime(CLOCK_MONOTONIC, &t0);
     quat_lattice_mul(trans, &inv, &(lideal2->lattice), alg);
-    clock_gettime(CLOCK_MONOTONIC, &t1);
-
-    fprintf(stderr, "[call %3d] HNF=%.1fms  starting MLLL...\n", call_count,
-            (t1.tv_sec - t0.tv_sec) * 1000.0 + (t1.tv_nsec - t0.tv_nsec) / 1e6);
-    fflush(stderr);
-
-    quat_lattice_t mlll_result;
-    quat_lattice_init(&mlll_result);
-    quat_lattice_mul_mlll(&mlll_result, &inv, &(lideal2->lattice), alg);
-    clock_gettime(CLOCK_MONOTONIC, &t2);
-
-    double mlll_ms = (t2.tv_sec - t1.tv_sec) * 1000.0 + (t2.tv_nsec - t1.tv_nsec) / 1e6;
-    int equal = quat_lattice_equal(trans, &mlll_result);
-    fprintf(stderr, "[call %3d] MLLL=%.1fms  equal=%d\n", call_count, mlll_ms, equal);
-    fflush(stderr);
-
-    if (!equal) {
-        fprintf(stderr, "  *** MISMATCH at call %d ***\n", call_count);
-        fflush(stderr);
-    }
-
-    quat_lattice_finalize(&mlll_result);
-
     quat_lattice_finalize(&inv);
 }
 

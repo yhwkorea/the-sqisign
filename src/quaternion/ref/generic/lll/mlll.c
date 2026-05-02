@@ -1,36 +1,42 @@
 /**
  * @file mlll.c
- * @brief Modified LLL (MLLL) algorithm — exact integer d/λ version
+ * @brief Modified LLL (MLLL) — Compact paper Algorithm 1, paper-strict + float μ/B.
  *
- * Pohst (1987) MLLL with exact integer d[] and λ[][] (Cohen 2.6.7 style).
- * Gram matrix is exact integer, incrementally updated during size-reduce/swap.
- * After each swap, d/lam are recomputed from scratch for robustness.
+ * Paper-strict representation (D2 rewrite, 2026-04-24):
+ *   b[i] ∈ ℤ^4           — basis vector (integer, Lemma 3 bound ‖a‖)
+ *   G[i][j] = <b[i],b[j]> — Gram matrix (integer, Lemma 3 bound ‖a‖²)
+ *   μ[i][j]               — real-valued (fp_t, 4 backends via mlll_fp_ops.h)
+ *   B[j]    = ‖b[j]*‖²    — real-valued (fp_t)
  *
- * - Vector coordinates b[i]: ibz_t (Lemma 1 bounded)
- * - Gram matrix G[i][j] = <b[i], b[j]>: ibz_t (exact)
- * - d[k]: Gram determinant of b[0..k-1], ibz_t (exact)
- * - lam[i][j] = d[j+1]*μ[i][j]: ibz_t (exact)
- * - Dependency detection: d[k+1] == 0 (exact integer test)
+ * Backend selector (compile-time):
+ *   -DMLLL_FP_KIND=0 → double           (53-bit, ±1023 exp; L5 overflow expected)
+ *   -DMLLL_FP_KIND=1 → mpf_t (GMP)      (MLLL_FP_PREC bits, default 128)
+ *   -DMLLL_FP_KIND=2 → mpfr_t           (correctly-rounded)
+ *   -DMLLL_FP_KIND=3 → dpe_t            (double + int64 exp, fplll style) [default]
  *
- * No HNF post-processing needed — dependent vectors are eliminated through
- * exact size-reduction and swaps.
+ * Rationale: Paper Appendix A.1 explicitly states μ is "real-valued" and does
+ * not introduce new unbounded integers. Previous integer-rational (D1) variant
+ * inflated intermediate to ~6·p_bits due to 3-term product (μ²·B) blowup.
+ * With float μ/B, the Lemma 3 bound ‖a‖² holds literally for (b, G, h).
  */
 
 #include <quaternion.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include "internal.h"
 #include "lll_internals.h"
 #include "mlll_internals.h"
 #include "bitsize_tracker.h"
+#include "mlll_fp_ops.h"
 
 #define N MLLL_MAX_GENERATORS
 
-/* Access symmetric Gram entry: G[max(i,j)][min(i,j)] */
-#define GRAM(G, i, j) ((i) < (j) ? &(G)[(j)][(i)] : &(G)[(i)][(j)])
+/* ========== ibz vector helpers ========== */
 
-/* ---------- helpers ---------- */
-
+/* Quaternion norm bilinear form: <a,b> = a0*b0 + a1*b1 + p*a2*b2 + p*a3*b3 */
 static void
-ibz_vec_4_dot_quat(ibz_t *dot, const ibz_vec_4_t *a, const ibz_vec_4_t *b, const ibz_t *p)
+ibz_vec_4_dot(ibz_t *dot, const ibz_vec_4_t *a, const ibz_vec_4_t *b,
+              const ibz_t *p)
 {
     ibz_t tmp;
     ibz_init(&tmp);
@@ -63,151 +69,102 @@ ibz_vec_4_swap(ibz_vec_4_t *a, ibz_vec_4_t *b)
         ibz_swap(&((*a)[i]), &((*b)[i]));
 }
 
-/* ---------- Gram matrix operations ---------- */
+/* ========== Bitsize tracking ========== */
 
-static void
-gram_compute_row(int idx, int beta, ibz_t G[][N],
-                 const ibz_vec_4_t *b, const ibz_t *p)
-{
-    (void)beta;
-    for (int j = 0; j <= idx; j++)
-        ibz_vec_4_dot_quat(&G[idx][j], &b[idx], &b[j], p);
+static int max_bits_vec = 0;
+static int max_bits_gram = 0;
+static int max_bits_intermediate = 0;
+static int mlll_call_count = 0;
+
+static inline void track_intermediate(const ibz_t *v) {
+    int b = ibz_bitsize(v);
+    if (b > max_bits_intermediate) max_bits_intermediate = b;
+    tracker_update_gso_ibz(v);
 }
 
-/**
- * @brief Update Gram matrix after b[k] -= X * b[l]
- *
- * Two-step update: G[k][k] -= X*G[k][l], then G[k][j] -= X*G[l][j] for all j.
- * Since l < k, the G[k][l] entry is updated before G[k][k] in the loop,
- * yielding the correct result: G[k][k] = old - 2X*G[k][l] + X²*G[l][l].
- */
+static inline void track_gram(const ibz_t *v) {
+    int b = ibz_bitsize(v);
+    if (b > max_bits_gram) max_bits_gram = b;
+}
+
+void mlll_print_max_bits(void) {
+    fprintf(stderr, "[MLLL bitsize, fp=%s prec=%d] calls=%d  "
+            "vec=%d bits (%d u64)  G=%d bits (%d u64)  "
+            "intermediate=%d bits (%d u64)\n",
+            MLLL_FP_NAME, MLLL_FP_PREC,
+            mlll_call_count,
+            max_bits_vec, (max_bits_vec + 63) / 64,
+            max_bits_gram, (max_bits_gram + 63) / 64,
+            max_bits_intermediate, (max_bits_intermediate + 63) / 64);
+}
+
+/* ========== Gram / μ / B maintenance ========== */
+
 static void
-gram_size_reduce(int k, int l, const ibz_t *X, int beta,
-                 ibz_t G[][N])
+compute_gram_row(int idx, ibz_vec_4_t b[], ibz_t G[][N], const ibz_t *p)
 {
-    ibz_t tmp;
-    ibz_init(&tmp);
-
-    ibz_mul(&tmp, X, GRAM(G, k, l));
-    ibz_sub(&G[k][k], &G[k][k], &tmp);
-
-    for (int j = 0; j < beta; j++) {
-        ibz_mul(&tmp, X, GRAM(G, l, j));
-        ibz_sub(GRAM(G, k, j), GRAM(G, k, j), &tmp);
+    for (int j = 0; j <= idx; j++) {
+        ibz_vec_4_dot(&G[idx][j], &b[idx], &b[j], p);
+        track_gram(&G[idx][j]);
+        if (j != idx)
+            ibz_copy(&G[j][idx], &G[idx][j]);
     }
-
-    ibz_finalize(&tmp);
 }
 
-static void
-gram_swap(int k, int beta, ibz_t G[][N])
-{
-    for (int j = 0; j < beta; j++) {
-        if (j == k || j == k - 1)
-            continue;
-        ibz_swap(GRAM(G, k, j), GRAM(G, k - 1, j));
-    }
-    ibz_swap(&G[k][k], &G[k - 1][k - 1]);
-}
-
-/* ---------- exact integer helpers ---------- */
-
-/**
- * @brief Nearest-integer division: q = round(a/b)
+/* Compute μ[idx][j] for 0 ≤ j < idx, and B[idx].  Uses paper line 2 formula:
+ *   μ[β][j] = (G[β][j] - Σ_{k<j} μ[β][k]·μ[j][k]·B[k]) / B[j]
+ *   B[β]    = G[β][β] - Σ_{j<β} μ[β][j]²·B[j]
  */
 static void
-rounded_div(ibz_t *q, const ibz_t *a, const ibz_t *b)
+compute_mu_B_row(int idx, ibz_t G[][N], fp_t mu[][N], fp_t B[])
 {
-    ibz_t r, sign_q, abs_b;
-    ibz_init(&r);
-    ibz_init(&sign_q);
-    ibz_init(&abs_b);
+    fp_t acc, term, term2;
+    fp_init(acc); fp_init(term); fp_init(term2);
 
-    ibz_abs(&abs_b, b);
-    ibz_mul(&sign_q, a, b);
-    ibz_div(q, &r, a, b);
-    ibz_abs(&r, &r);
-    ibz_add(&r, &r, &r);
-    ibz_set(&sign_q,
-            (1 - 2 * (ibz_cmp(&sign_q, &ibz_const_zero) < 0)) *
-            (ibz_cmp(&r, &abs_b) > 0));
-    ibz_add(q, q, &sign_q);
+    for (int j = 0; j < idx; j++) {
+        fp_set_z(acc, G[idx][j]);  /* acc = G[idx][j] */
 
-    ibz_finalize(&r);
-    ibz_finalize(&sign_q);
-    ibz_finalize(&abs_b);
-}
-
-/**
- * @brief Exact integer division: q = a/b (asserts remainder == 0)
- */
-static void
-exact_div(ibz_t *q, const ibz_t *a, const ibz_t *b)
-{
-    ibz_t r;
-    ibz_init(&r);
-    ibz_div(q, &r, a, b);
-    assert(ibz_is_zero(&r));
-    ibz_finalize(&r);
-}
-
-/**
- * @brief Compute lam[k][0..k-1] and d[k+1] from Gram matrix.
- *
- * Cohen Algorithm 2.6.3 recurrence. When d[s] = 0 (R-dependent vectors),
- * the numerator is provably also 0 — we handle this by setting num = 0.
- */
-static void
-compute_lam_d_row(int k, ibz_t G[][N], ibz_t lam[][N], ibz_t *d)
-{
-    ibz_t num, t1, t2;
-    ibz_init(&num);
-    ibz_init(&t1);
-    ibz_init(&t2);
-
-    for (int j = 0; j <= k; j++) {
-        ibz_copy(&num, GRAM(G, k, j));
-
-        for (int s = 0; s < j; s++) {
-            ibz_mul(&t1, &d[s + 1], &num);
-            if (j < k)
-                ibz_mul(&t2, &lam[k][s], &lam[j][s]);
-            else
-                ibz_mul(&t2, &lam[k][s], &lam[k][s]);
-            ibz_sub(&t1, &t1, &t2);
-
-            if (ibz_is_zero(&d[s])) {
-                /* d[s]=0: vectors 0..s-1 are R-dependent.
-                 * By algebraic structure, numerator is also 0. */
-                ibz_set(&num, 0);
-            } else {
-                exact_div(&num, &t1, &d[s]);
-            }
+        for (int k = 0; k < j; k++) {
+            if (fp_is_zero(B[k]))
+                continue;
+            /* term = μ[idx][k] · μ[j][k] · B[k] */
+            fp_mul(term, mu[idx][k], mu[j][k]);
+            fp_mul(term, term, B[k]);
+            fp_sub(acc, acc, term);
         }
 
-        if (j < k)
-            ibz_copy(&lam[k][j], &num);
-        else
-            ibz_copy(&d[k + 1], &num);
+        if (fp_is_zero(B[j])) {
+            fp_set_ui(mu[idx][j], 0);
+        } else {
+            fp_div(mu[idx][j], acc, B[j]);
+        }
     }
 
-    ibz_finalize(&num);
-    ibz_finalize(&t1);
-    ibz_finalize(&t2);
+    /* B[idx] = G[idx][idx] - Σ μ[idx][j]² · B[j] */
+    fp_set_z(B[idx], G[idx][idx]);
+    for (int j = 0; j < idx; j++) {
+        if (fp_is_zero(B[j]))
+            continue;
+        fp_mul(term,  mu[idx][j], mu[idx][j]);
+        fp_mul(term2, term, B[j]);
+        fp_sub(B[idx], B[idx], term2);
+    }
+
+    fp_clear(acc); fp_clear(term); fp_clear(term2);
 }
 
-/**
- * @brief Recompute all d[] and lam[][] from scratch using current Gram matrix.
- */
+/* Recompute the entire GSO (rows 0..beta-1).  Also refills G. */
 static void
-recompute_all_lam_d(int beta, ibz_t G[][N], ibz_t lam[][N], ibz_t *d)
+recompute_all(int beta, ibz_vec_4_t b[], ibz_t G[][N],
+              fp_t mu[][N], fp_t B[], const ibz_t *p)
 {
-    ibz_set(&d[0], 1);
-    for (int k = 0; k < beta; k++)
-        compute_lam_d_row(k, G, lam, d);
+    for (int i = 0; i < beta; i++)
+        compute_gram_row(i, b, G, p);
+    for (int i = 0; i < beta; i++)
+        compute_mu_B_row(i, G, mu, B);
 }
 
-/* ========== MLLL core ========== */
+/* ========== MLLL core — paper Alg 1 ========== */
 
 void
 quat_mlll(ibz_mat_4x4_t *basis,
@@ -219,197 +176,201 @@ quat_mlll(ibz_mat_4x4_t *basis,
     assert(g >= 1 && g <= N);
 
     ibz_vec_4_t b[N];
-    ibz_t G[N][N];      /* Gram matrix (lower triangular, exact) */
-    ibz_t d[N + 1];     /* d[0]=1, d[k+1] = det(Gram(b[0..k])) */
-    ibz_t lam[N][N];    /* lam[i][j] = d[j+1]*μ[i][j], j < i */
+    ibz_t G[N][N];
+    fp_t mu[N][N];
+    fp_t B[N];
 
     for (int i = 0; i < g; i++) {
         ibz_vec_4_init(&b[i]);
         for (int j = 0; j < g; j++) {
             ibz_init(&G[i][j]);
-            ibz_init(&lam[i][j]);
+            fp_init(mu[i][j]);
         }
+        fp_init(B[i]);
     }
-    for (int i = 0; i <= g; i++)
-        ibz_init(&d[i]);
-    ibz_set(&d[0], 1);
 
-    ibz_t X, tmp, tmp2;
-    ibz_init(&X);
-    ibz_init(&tmp);
-    ibz_init(&tmp2);
+    ibz_t t;
+    fp_t mu_abs, half, mu_sq, three_quarters, rhs, t_fp, tmp_fp;
+    ibz_init(&t);
+    fp_init(mu_abs); fp_init(half); fp_init(mu_sq);
+    fp_init(three_quarters); fp_init(rhs); fp_init(t_fp); fp_init(tmp_fp);
+    fp_set_ui(half, 1); { fp_t two; fp_init(two); fp_set_ui(two, 2); fp_div(half, half, two); fp_clear(two); }
+    fp_set_ui(three_quarters, 3); { fp_t four; fp_init(four); fp_set_ui(four, 4); fp_div(three_quarters, three_quarters, four); fp_clear(four); }
 
-    int alpha = 0, beta = 0, tau = 1, m, l;
+    int alpha = 0, beta = 0, tau = 2, m, l;
 
     /* ===== LOAD ===== */
 load:
-    while (alpha < g) {
-        if (ibz_vec_4_is_zero(&generators[alpha])) {
-            alpha++;
-            continue;
-        }
+    if (alpha >= g)
+        goto start_reduce;
 
-        for (int i = 0; i < 4; i++)
-            ibz_copy(&(b[beta][i]), &(generators[alpha][i]));
+    while (alpha < g && ibz_vec_4_is_zero(&generators[alpha]))
         alpha++;
+    if (alpha >= g)
+        goto start_reduce;
 
-        /* Compute Gram row for new vector */
-        gram_compute_row(beta, beta + 1, G, b, &alg->p);
-        beta++;
+    for (int i = 0; i < 4; i++)
+        ibz_copy(&(b[beta][i]), &(generators[alpha][i]));
+    alpha++;
 
-        /* Recompute ALL d/lam from scratch (handles stale values from
-         * prior flagg=1 swaps and natural R-dependencies) */
-        recompute_all_lam_d(beta, G, lam, d);
+    compute_gram_row(beta, b, G, &alg->p);
+    compute_mu_B_row(beta, G, mu, B);
+    beta++;
 
-        if (!ibz_is_zero(&d[beta]) && alpha < g)
-            continue;   /* independent vector, load more */
+    if (!fp_is_zero(B[beta - 1]) && alpha < g)
+        goto load;
 
-        break;  /* dependent or last generator → reduce */
-    }
-
+start_reduce:
     if (beta <= 1)
         goto done;
 
     m = tau;
-    if (m >= beta)
-        m = beta - 1;
-    if (m < 1)
-        m = 1;
+    if (m > beta) m = beta;
+    if (m < 2)    m = 2;
 
     /* ===== REDUCTION ===== */
 reduction:
+    recompute_all(beta, b, G, mu, B, &alg->p);
+
     l = m - 1;
 
 size_reduce:
-    /* REDI(m, l): exact size-reduce b[m] against b[l] */
-    if (l >= 0 && !ibz_is_zero(&d[l + 1])) {
-        /* Check |2*lam[m][l]| > d[l+1] */
-        ibz_add(&tmp, &lam[m][l], &lam[m][l]);
-        ibz_abs(&tmp, &tmp);
-        if (ibz_cmp(&tmp, &d[l + 1]) > 0) {
-            rounded_div(&X, &lam[m][l], &d[l + 1]);
+    /* |μ[m-1][l-1]| > 1/2 ? */
+    if (l >= 1 && !fp_is_zero(B[l - 1]) && !fp_is_zero(mu[m - 1][l - 1])) {
+        fp_abs(mu_abs, mu[m - 1][l - 1]);
+        if (fp_cmp(mu_abs, half) > 0) {
+            /* t = round(μ[m-1][l-1]) */
+            fp_round_z(t, mu[m - 1][l - 1]);
 
-            if (!ibz_is_zero(&X)) {
-                /* b[m] -= X * b[l] */
-                ibz_vec_4_sub_scalar_mul(&b[m], &X, &b[l]);
-                tracker_update_vec4(&b[m]);
+            if (!ibz_is_zero(&t)) {
+                /* b[m-1] -= t · b[l-1] */
+                ibz_vec_4_sub_scalar_mul(&b[m - 1], &t, &b[l - 1]);
+                tracker_update_vec4(&b[m - 1]);
 
-                /* Update Gram matrix */
-                gram_size_reduce(m, l, &X, beta, G);
+                /* Update G (ibz) for row/col m-1. */
+                ibz_t gtmp;
+                ibz_init(&gtmp);
+                for (int j = 0; j < beta; j++) {
+                    if (j == m - 1) continue;
+                    ibz_mul(&gtmp, &t, &G[l - 1][j]);
+                    track_intermediate(&gtmp);
+                    ibz_sub(&G[m - 1][j], &G[m - 1][j], &gtmp);
+                    ibz_copy(&G[j][m - 1], &G[m - 1][j]);
+                    track_gram(&G[m - 1][j]);
+                }
+                /* Recompute G[m-1][m-1] from b to avoid 2t·G_ml + t²·G_ll blowup. */
+                ibz_vec_4_dot(&G[m - 1][m - 1], &b[m - 1], &b[m - 1], &alg->p);
+                track_gram(&G[m - 1][m - 1]);
+                ibz_finalize(&gtmp);
 
-                /* Update lam: lam[m][l] -= X*d[l+1], lam[m][j] -= X*lam[l][j] */
-                ibz_mul(&tmp, &X, &d[l + 1]);
-                ibz_sub(&lam[m][l], &lam[m][l], &tmp);
-                for (int j = 0; j < l; j++) {
-                    ibz_mul(&tmp, &X, &lam[l][j]);
-                    ibz_sub(&lam[m][j], &lam[m][j], &tmp);
+                /* μ row update (paper line 9, float arithmetic):
+                 *   μ[m-1][l-1] -= t
+                 *   μ[m-1][j]   -= t·μ[l-1][j]  for j < l-1
+                 */
+                fp_set_z(t_fp, t);
+                fp_sub(mu[m - 1][l - 1], mu[m - 1][l - 1], t_fp);
+                for (int j = 0; j < l - 1; j++) {
+                    fp_mul(tmp_fp, t_fp, mu[l - 1][j]);
+                    fp_sub(mu[m - 1][j], mu[m - 1][j], tmp_fp);
                 }
             }
         }
     }
 
-    if (ibz_vec_4_is_zero(&b[m]))
+    if (ibz_vec_4_is_zero(&b[m - 1]))
         goto remove_vector;
 
-    l--;
-    if (l >= 0)
+    /* Dependent but nonzero: swap down. */
+    if (fp_is_zero(B[m - 1])) {
+        if (m >= 2) {
+            ibz_vec_4_swap(&b[m - 1], &b[m - 2]);
+            if (m > 2)
+                m = m - 1;
+        }
+        goto reduction;
+    }
+
+    if (l < m - 1)
+        goto next_l;
+
+    /* Lovász condition: B[m-1] < (3/4 - μ[m-1][m-2]²) · B[m-2] */
+    if (m >= 2 && !fp_is_zero(B[m - 2])) {
+        fp_mul(mu_sq, mu[m - 1][m - 2], mu[m - 1][m - 2]);
+        fp_sub(rhs, three_quarters, mu_sq);
+        fp_mul(rhs, rhs, B[m - 2]);
+
+        if (fp_cmp(B[m - 1], rhs) < 0)
+            goto do_swap;
+    }
+
+next_l:
+    l = l - 1;
+    if (l >= 1)
         goto size_reduce;
-
-    /* === All size-reductions for b[m] done. Check swap conditions. === */
-
-    /* Case 1: d[m+1]=0 — dependent vector (Matthews D_k=0).
-     * Force swap to cascade dependent vector toward position 1,
-     * where REDI against a shorter vector can eliminate it.
-     * Must bypass tau barrier (unlike Lovász swaps). */
-    if (ibz_is_zero(&d[m + 1]))
-        goto do_swap_dep;
-
-    /* Case 2: Lovász condition.
-     * Swap if 4*(d[m-1]*d[m+1] + lam[m][m-1]²) < 3*d[m]² */
-    ibz_mul(&tmp, &d[m - 1], &d[m + 1]);
-    ibz_mul(&tmp2, &lam[m][m - 1], &lam[m][m - 1]);
-    ibz_add(&tmp, &tmp, &tmp2);
-    ibz_add(&tmp, &tmp, &tmp);    /* ×2 */
-    ibz_add(&tmp, &tmp, &tmp);    /* ×4 */
-
-    ibz_mul(&tmp2, &d[m], &d[m]);
-    ibz_mul(&tmp2, &tmp2, &ibz_const_three);
-
-    if (ibz_cmp(&tmp, &tmp2) < 0)
-        goto do_swap_lov;
-
-    m++;
-    if (m >= beta) {
+    m = m + 1;
+    if (m > beta) {
         if (alpha < g) {
-            tau = beta;
+            tau = m;
             goto load;
         }
         goto done;
     }
     goto reduction;
 
-    /* ===== SWAP (dependent vector) ===== */
-do_swap_dep:
-    ibz_vec_4_swap(&b[m], &b[m - 1]);
-    tracker_update_vec4(&b[m]);
+    /* ===== SWAP ===== */
+do_swap:
+    ibz_vec_4_swap(&b[m - 1], &b[m - 2]);
     tracker_update_vec4(&b[m - 1]);
-    gram_swap(m, beta, G);
-    recompute_all_lam_d(beta, G, lam, d);
-    if (m > 1)
-        m--;
-    goto reduction;
-
-    /* ===== SWAP (Lovász) ===== */
-do_swap_lov:
-    ibz_vec_4_swap(&b[m], &b[m - 1]);
-    tracker_update_vec4(&b[m]);
-    tracker_update_vec4(&b[m - 1]);
-    gram_swap(m, beta, G);
-    recompute_all_lam_d(beta, G, lam, d);
-    if (m > tau)
-        m--;
+    tracker_update_vec4(&b[m - 2]);
+    if (m > 2)
+        m = m - 1;
     goto reduction;
 
     /* ===== REMOVE ===== */
 remove_vector:
-    /* Shift b[] down from position m */
-    for (int i = m; i < beta - 1; i++) {
+    for (int i = m; i <= beta - 1; i++) {
         for (int c = 0; c < 4; c++)
-            ibz_copy(&(b[i][c]), &(b[i + 1][c]));
+            ibz_copy(&(b[i - 1][c]), &(b[i][c]));
     }
     beta--;
 
-    /* Recompute Gram for shifted positions */
-    for (int i = m; i < beta; i++)
-        gram_compute_row(i, beta, G, b, &alg->p);
-
-    /* Recompute all d/lam from scratch */
-    recompute_all_lam_d(beta, G, lam, d);
-
     if (alpha >= g) {
-        /* All generators loaded. Re-run reduction from m=1 to
-         * ensure full LLL-reducedness after forced-swap cascades. */
         if (beta <= 1)
             goto done;
-        m = 1;
+        recompute_all(beta, b, G, mu, B, &alg->p);
+        m = 2;
+        if (m > beta)
+            goto done;
         goto reduction;
     }
 
-    tau = m + 1;
-    if (tau < 1)
-        tau = 1;
+    recompute_all(beta, b, G, mu, B, &alg->p);
+    tau = m;
+    if (tau < 2) tau = 2;
     goto load;
 
 done:
-    /* Stop tracking: reduction loop is done */
     tracker_disable();
 
-    /* Extract result */
-    *rank = 0;
+    mlll_call_count++;
+    int nz_count = 0;
+    for (int i = 0; i < beta; i++) {
+        if (!ibz_vec_4_is_zero(&b[i])) nz_count++;
+        for (int c = 0; c < 4; c++) {
+            int bs = ibz_bitsize(&(b[i][c]));
+            if (bs > max_bits_vec) max_bits_vec = bs;
+        }
+    }
+
+    /* Initialize output basis */
     for (int i = 0; i < 4; i++)
         for (int j = 0; j < 4; j++)
             ibz_set(&((*basis)[i][j]), 0);
 
+    /* Paper Alg 1: MLLL must produce a clean rank-≤4 basis (all dependent
+     * vectors size-reduced to zero and removed).  No post-processing. */
+    assert(nz_count <= 4);
+    *rank = 0;
     for (int i = 0; i < beta && *rank < 4; i++) {
         if (!ibz_vec_4_is_zero(&b[i])) {
             for (int j = 0; j < 4; j++)
@@ -423,14 +384,13 @@ done:
         ibz_vec_4_finalize(&b[i]);
         for (int j = 0; j < g; j++) {
             ibz_finalize(&G[i][j]);
-            ibz_finalize(&lam[i][j]);
+            fp_clear(mu[i][j]);
         }
+        fp_clear(B[i]);
     }
-    for (int i = 0; i <= g; i++)
-        ibz_finalize(&d[i]);
-    ibz_finalize(&X);
-    ibz_finalize(&tmp);
-    ibz_finalize(&tmp2);
+    ibz_finalize(&t);
+    fp_clear(mu_abs); fp_clear(half); fp_clear(mu_sq);
+    fp_clear(three_quarters); fp_clear(rhs); fp_clear(t_fp); fp_clear(tmp_fp);
 }
 
 /* ========== Lattice operations using MLLL ========== */
@@ -451,14 +411,21 @@ quat_lattice_mul_mlll(quat_lattice_t *res,
     for (int i = 0; i < 16; i++)
         ibz_vec_4_init(&generators[i]);
 
+    ibz_mat_4x4_t red1, red2;
+    ibz_mat_4x4_init(&red1);
+    ibz_mat_4x4_init(&red2);
+
+    quat_lattice_lll(&red1, lat1, alg);
+    quat_lattice_lll(&red2, lat2, alg);
+
     for (int k = 0; k < 4; k++) {
         ibz_vec_4_copy_ibz(
-            &elem1, &(lat1->basis[0][k]), &(lat1->basis[1][k]),
-            &(lat1->basis[2][k]), &(lat1->basis[3][k]));
+            &elem1, &(red1[0][k]), &(red1[1][k]),
+            &(red1[2][k]), &(red1[3][k]));
         for (int i = 0; i < 4; i++) {
             ibz_vec_4_copy_ibz(
-                &elem2, &(lat2->basis[0][i]), &(lat2->basis[1][i]),
-                &(lat2->basis[2][i]), &(lat2->basis[3][i]));
+                &elem2, &(red2[0][i]), &(red2[1][i]),
+                &(red2[2][i]), &(red2[3][i]));
             quat_alg_coord_mul(&elem_res, &elem1, &elem2, alg);
             for (int j = 0; j < 4; j++)
                 ibz_copy(&(generators[4 * k + i][j]), &(elem_res[j]));
@@ -471,6 +438,8 @@ quat_lattice_mul_mlll(quat_lattice_t *res,
     ibz_mul(&(res->denom), &(lat1->denom), &(lat2->denom));
     quat_lattice_reduce_denom(res, res);
 
+    ibz_mat_4x4_finalize(&red1);
+    ibz_mat_4x4_finalize(&red2);
     ibz_vec_4_finalize(&elem1);
     ibz_vec_4_finalize(&elem2);
     ibz_vec_4_finalize(&elem_res);

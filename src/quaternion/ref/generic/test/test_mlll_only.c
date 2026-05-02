@@ -53,6 +53,37 @@ int main(void)
     printf("lideal_create_gram_equivalence done (res=%d)\n", res);
     fflush(stdout);
 
+    printf("Starting MLLL test: gram_prealloc_equivalence...\n");
+    fflush(stdout);
+    res |= quat_test_mlll_gram_prealloc_equivalence();
+    printf("gram_prealloc_equivalence done (res=%d)\n", res);
+    fflush(stdout);
+
+    printf("Starting MLLL test: fp_arith_vs_ibz...\n");
+    fflush(stdout);
+    res |= quat_test_fp_arith_vs_ibz();
+    printf("fp_arith_vs_ibz done (res=%d)\n", res);
+    fflush(stdout);
+
+    printf("Starting MLLL test: fp_mul_vs_ibz...\n");
+    fflush(stdout);
+    res |= quat_test_fp_mul_vs_ibz();
+    printf("fp_mul_vs_ibz done (res=%d)\n", res);
+    fflush(stdout);
+
+    printf("Starting MLLL test: gram_fp_equivalence...\n");
+    fflush(stdout);
+    res |= quat_test_mlll_gram_fp_equivalence();
+    printf("gram_fp_equivalence done (res=%d)\n", res);
+    fflush(stdout);
+
+    /* NOTE: quat_test_alg4_mlll_gram_equivalence was referenced by 5ef9b76 but
+     * never defined in mlll_tests.c. The original feat/mlll-ideal-operations
+     * branch had the same orphan reference (dormant link bug — surfaces only
+     * when sqisign_test_mlll is built). Removed in PR4 to restore link.
+     * Alg4 equivalence is covered by quat_test_lideal_create_gram_equivalence
+     * in mlll_tests.c. */
+
     printf("Starting MLLL test: all_zero_generators...\n");
     fflush(stdout);
     res |= quat_test_mlll_all_zero_generators();

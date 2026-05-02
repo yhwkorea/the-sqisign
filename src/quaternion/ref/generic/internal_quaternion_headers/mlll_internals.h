@@ -51,6 +51,47 @@ void quat_mlll_gram(ibz_mat_4x4_t *basis,
                     const quat_alg_t *alg);
 
 /**
+ * @brief Phase 2 candidate B scaffold — fixed-width GMP prealloc hint.
+ *
+ * When enabled, `quat_mlll_gram` calls `mpz_realloc2` on its internal
+ * `b[]`/`G[][]`/`X`/`tmp` buffers after init to prealloc the Lemma 3
+ * width per security level (derived from `alg->p` bitsize). Goal: reduce
+ * repeated heap reallocations that GMP triggers during size-reduce.
+ *
+ * This is a hint-only optimization (see FIXED_PRECISION_DECISION_KO §3.2).
+ * Output is bitwise identical to the unhinted path.
+ *
+ * Mode values:
+ *   0 — off (baseline, default).
+ *   1 — on (prealloc hints applied at entry).
+ *
+ * Thread-safety: process-global. Benchmarks/tests must not race.
+ */
+void quat_mlll_gram_set_prealloc_mode(int mode);
+int quat_mlll_gram_get_prealloc_mode(void);
+
+/**
+ * @brief Phase 2 candidate C switch — fixed-precision (`quat_fp_*`) path.
+ *
+ * When enabled, `quat_mlll_gram` calls the fixed-precision body whose
+ * integer storage is stack-allocated `digit_t[NWORDS]` sized per
+ * security level (via `quat_fp_widths_from_alg`). Output is the same
+ * lattice as the `ibz_t` path under the Lemma 3 invariant.
+ *
+ * Fallback: if the level dispatch does not match (e.g., `alg->p` larger
+ * than L5), the dispatcher silently falls through to the `ibz_t` path.
+ *
+ * Mode values:
+ *   0 — off (default; `ibz_t` path, honors prealloc_mode).
+ *   1 — on (fp path when widths resolve; else ibz_t fallback).
+ *
+ * The fp and prealloc modes are independent: fp shortcut is tested first,
+ * prealloc is inspected only on the fallthrough.
+ */
+void quat_mlll_gram_set_fp_mode(int mode);
+int quat_mlll_gram_get_fp_mode(void);
+
+/**
  * @brief Lattice multiplication using MLLL instead of HNF
  *
  * Replaces quat_lattice_mul with MLLL-based approach.

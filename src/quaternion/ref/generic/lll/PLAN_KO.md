@@ -55,32 +55,44 @@
 
 **Why**: 감사 C1 픽스로 Cohen path max가 3028→3543 bits로 이동. L3/L5도 같은 폭 누락 가능성 있어 재측정. GRAM 경로는 거의 영향 없음을 실측 확인 — Phase 2 typedef 폭 그대로 사용 가능.
 
-### Phase 2 — Fixed-precision 전환 (3-5일)
+### Phase 2 — Fixed-precision 전환 (완료: 2026-04-21)
 
-**목표**: `ibz_t`(GMP 동적) → 레벨별 고정폭 정수로 내부 산술 전환. Constant-time 가능성 확보 + 힙 할당 제거.
+**목표**: `ibz_t`(GMP 동적) → 고정폭 산술로 내부 전환. B와 C 둘 다 구현하고 실측으로 primary 결정. 상세: [FIXED_PRECISION_DECISION_KO.md](FIXED_PRECISION_DECISION_KO.md)
 
-- [ ] **P2-1** 백엔드 선택 결정 문서 (별도 `FIXED_PRECISION_DECISION_KO.md`)
-  - 후보 A: GMP `mpn_*` lowlevel API (익숙, heap 유지)
-  - 후보 B: `ibz_t` + `mpz_realloc2` (최소 변경, heap 유지)
-  - 후보 C: bare `uint64_t[N]` (constant-time 가능, 재작성 많음)
-- [ ] **P2-2** 레벨별 typedef 정의 (`quat_b_vec_Lk_t`, `quat_b_gram_Lk_t`)
-  - L1: vec 5×u64(320b), Gram 9×u64(576b)
-  - L3: vec 7×u64(448b), Gram 13×u64(832b)
-  - L5: vec 9×u64(576b), Gram 17×u64(1088b)
-- [ ] **P2-3** `quat_mlll_gram` 내부 산술을 typedef로 치환 (GRAM 경로만 우선)
-- [ ] **P2-4** Overflow trap: B* 초과 시 `abort()` (릴리즈 빌드에서도 활성)
-- [ ] **P2-5** 동치성 테스트: 기존 `ibz_t` 경로와 결과 일치 (`quat_test_mlll_gram_equivalence` 확장, trials 100+)
+- [x] **P2-1** 백엔드 결정 문서 초안 — `FIXED_PRECISION_DECISION_KO.md` (2026-04-22). A 탈락, B와 C 병행 구현 방침 확정.
+- [x] **P2-B** B 구현: `ibz_t` + `mpz_realloc2` prealloc scaffold (2026-04-21). 동치성 검증 PASS, 벤치 결과 hint only 확인 — B 단독으로는 목표 미달성, reference oracle로 유지. 상세: `FIXED_PRECISION_DECISION_KO.md` §5.5.
+- [x] **P2-C-types** Per-level 폭 매크로 + 런타임 descriptor(`quat_fp_widths_t`) + 단일 최대폭 array. Two's complement storage + sign-magnitude mul 확정. 상세: `FIXED_PRECISION_DECISION_KO.md` §6.2.
+- [x] **P2-C-gram** `quat_mlll_gram_fp` 본체 + dispatcher + fp-native size-reduce/swap/Gram update. `vec4_dot_p`만 ibz scratch bypass (L1 중간값 예산 초과). 상세: §6.3.
+- [x] **P2-overflow** `FP_CHECK_VEC`/`FP_CHECK_GRAM` 매크로로 mutation site 마다 budget 초과 시 `abort()`. `MLLL_FP_NO_OVERFLOW_CHECK` 빌드 플래그로 비활성 가능. **Budget 정정 (2026-04-22)**: 초기 공식 `(nwords-1)*64`는 margin narrative가 틀렸음이 확인됨(L3 vec peak 391b > 384b인데 trap 미발동). 정정된 공식 `nwords*64 - 2` (부호 1 + carry 1)로 L1/L3/L5 모두 48-61b 여유. 상세: `FIXED_PRECISION_DECISION_KO.md` §1, §6.4-c. Trap 감사 재수행은 §6.4-d에서 진행.
+- [x] **P2-equiv** 2-way pairwise 테스트 3개(ibz↔HNF, ibz↔B, ibz↔fp)로 HNF↔ibz↔B↔fp transitive equivalence. `quat_test_mlll_gram_fp_equivalence` PASS.
+- [x] **P2-decide** Primary = **C fp 경로** (`quat_mlll_gram_fp`) 최종 채택 (2026-04-21). `g_fp_mode = 1` 기본값. 결정 기준은 논문 contribution 4축(heap-free / Lemma 3 runtime 감사 / compact 연산 고정폭 입증 / CT 호환 여지) — fp가 유일 만족. ibz body는 fp 회귀 oracle로 보존. 시간 퇴행(L1 Alg 2 5.25×)은 수용 trade-off.
 
-**Why**: 논문 contribution의 핵심이 "compact 연산이 고정폭에 실제로 들어간다"는 실증. 현 구현은 여전히 `ibz_t`라 bitsize만 작을 뿐 메모리 레이아웃은 동일. 고정폭 전환 후에야 성능/메모리 이득이 드러남.
+**결정 요약** (FIXED_PRECISION_DECISION_KO.md §5.1, §5.6, §5.7):
+- Primary: `quat_mlll_gram_fp` (stack 고정폭 + schoolbook + overflow trap). `g_fp_mode = 1`.
+- 회귀 oracle: `quat_mlll_gram_ibz` (기존 ibz body). `set_fp_mode(0)` 또는 `--fp 0`로 명시 opt-out 가능.
+- B prealloc(`--prealloc`): ibz body 한정 서브튜닝 도구로 보존, 기본 OFF.
+- **시간 trade-off**: L1 Alg 2 fp/ibz = 5.25× (trap-off 4.65×), L3/L5 동률. GMP의 1-limb special case 상실이 주요인. 향후 `mpn_mul_1` inline 재설계 시 fp body에 직접 삽입.
 
-**전제**: Phase 1 완료 (typedef 폭이 L3/L5 재측정으로 확정되어야 함).
+**Why**: KLKL25(eprint 2025/1649)의 핵심 주장 "compact 연산이 고정폭에 실제로 들어간다"를 코드로 입증하는 것이 Phase 2의 본래 기준. 시간은 이 기준의 일부가 아님 — primary는 4축 만족 여부로 결정. Phase 3는 fp primary 위에 직접 쌓는다.
+
+**전제**: Phase 1 완료 (typedef 폭이 L3/L5 재측정으로 확정됨). ✅
+
+### Phase 2.1 — Dispatcher 임계값 수정 + fp 경로 실재성 재검증 ✅ (완료, 2026-04-22)
+
+**Why**: 2026-04-22 trap 감사(`FIXED_PRECISION_DECISION_KO.md` §6.7)에서 `quat_fp_widths_from_alg`의 임계값 128/200/256이 실제 SQIsign 소수 bitsize 251/383/505와 맞지 않아 **L3/L5에서 fp path가 조용히 미동작**(ibz fallback), **L1은 L5 widths로 오버사이징 동작**임이 SELFTEST 로 확정. Phase 2 측정 및 primary 결정 중 L3/L5 부분은 사실상 **fp 미검증 상태**였음.
+
+- [x] **P2.1-dispatch (2026-04-22)** `quat_fp_widths_from_alg` 임계값을 spec BITS 상수 기준 256/384/512로 정정. `mlll_gram_level_hints` 도 일관성 위해 동시 정정. §6.8 참조.
+- [x] **P2.1-widths-rerun (2026-04-22)** SELFTEST 3-레벨 모두 abort 확인 (L1:128b/nw5, L3:192b/nw7, L5:255b/nw9). 후속 capacity sweep 6-combo PASS (`bench_logs/p2_fp_capacity_verify/`). 최저 margin L3 alg2 Gram 52b.
+- [x] **P2.1-time-rerun (2026-04-22)** §5.6 3-way 시간 표 재측정 (alg2=500 iter, alg3=5000 iter). L1 alg2 fp/ibz 5.25×→3.29× (L5 오버사이징 해소 효과), L3/L5 alg2 는 최초 실측치 (3.98×, 4.78×), alg3 는 전 레벨 1.79~1.90× 안정.
+- [x] **P2.1-equiv-rerun (2026-04-22)** `quat_test_mlll_gram_fp_equivalence` 에 L1/L3/L5 production-matching prime (p=251/383/505) + 16 random gen (bound=sqrt(p)) 케이스 추가. 3-레벨 PASS.
+
+**결과**: Phase 3 blocker 해제. Phase 2 primary 확정이 3-레벨 전면 실증 기반으로 갱신됨.
 
 ### Phase 3 — Alg 1/4 MLLL 버전 구현 (1-2주)
 
 **목표**: 논문 Alg 1/4를 MLLL 경로로 구현. 기존 HNF 경로와 동치성 테스트.
 
-- [ ] **P3-1** Alg 1 IdealFiltration 설계 검토 (논문 03Ideal.tex + 04Sampling.tex 재정독)
-  - 기존 HNF 기반 filtration 함수 존재 여부 먼저 조사
+- [ ] **P3-1** Alg 1 IdealFiltration 설계 검토 (논문 03Ideal.tex + 04Sampling.tex 재정독). HNF 대조 기준이 필요하면 그때 `grep quat_lideal_filtration` 한 번이면 충분 — 별도 조사 step 아님.
 - [ ] **P3-2** `quat_lideal_filtration_mlll_gram` 구현
 - [ ] **P3-3** Alg 4 RandomEquivalentPrimeIdeal MLLL 버전
   - 기존 `quat_lideal_prime_norm_reduced_equivalent` (`lll_applications.c`) → `quat_lideal_prime_norm_reduced_equivalent_mlll_gram` 분기
@@ -113,11 +125,11 @@
 
 아직 미결정 항목. 진행 전에 별도 문서/메모리로 기록해야 함.
 
-1. **Phase 2 백엔드** (A/B/C 중 어느 것)
+1. ~~**Phase 2 백엔드** (A/B/C 중 어느 것)~~ — **2026-04-21 해결: baseline ibz_t 유지** (DECISION §5.1).
 2. **Alg 1 기존 HNF 구현 유무** (확인 필요, P3-1)
-3. **Constant-time 요구 수준** — Phase 2에서 C 백엔드로 갈지 여부의 전제
+3. **Constant-time 요구 수준** — Phase 2 결과 무관하게 fp scaffold가 CT 여지를 확보해 둠(`g_fp_mode` opt-in). 실수요 생길 때 재검토.
 4. **PR 1회 큰 덩어리 vs 5개 분할** — upstream 리뷰어 피드백 받아본 후 결정
-5. **Gram 외 Cohen 경로 유지 여부** — 비교/교차검증용으로 남길지, 제거할지
+5. **Gram 외 Cohen 경로 유지 여부** — 비교/교차검증용으로 남길지, 제거할지. Phase 3 착수 전 결정 필요.
 
 ## 논문 매핑 업데이트 (참고)
 
@@ -132,9 +144,10 @@
 | Phase | 기간 | 누적 | 상태 |
 |---|---|---|---|
 | P1 측정 | ~2d | 2026-04-21 | ✅ 완료 |
-| P2 fixed-precision | ~5d | 2026-04-26 | 진행 예정 (백엔드 결정 문서 착수) |
-| P3 Alg 1/4 | ~2w | 2026-05-10 | |
-| P4 SQIsign 통합 | ~3w | 2026-05-31 | |
-| P5 PR 분리 | ~1w | 2026-06-07 | |
+| P2 fixed-precision | ~11-14d → 1d | 2026-04-21 | ⚠️ **부분완료** (L1 한정 검증, 2026-04-22 trap 감사로 L3/L5 fp 미동작 발견) |
+| P2.1 dispatcher 수정 | ~1-2d → 1d | 2026-04-22 | ✅ **완료** (dispatch/widths/time/equiv 전 축 재검증, 3-레벨 PASS) |
+| P3 Alg 1/4 | ~2w | ~2026-05-05 | 착수 가능 |
+| P4 SQIsign 통합 | ~3w | ~2026-05-26 | |
+| P5 PR 분리 | ~1w | ~2026-06-02 | |
 
-실제 일정은 Phase 2 백엔드 결정과 Alg 1 기존 구현 조사 결과에 따라 크게 달라짐.
+Phase 2가 예상 11-14일 대신 1일에 종결된 이유: B(prealloc)가 §5.5에서 즉시 탈락했고 C(fp) 전체 구현 후 sweep에서도 승격 조건 미달이라 추가 튜닝 사이클 없이 decision 확정. 실제 일정은 Alg 1 기존 구현 조사 결과에 따라 달라짐.

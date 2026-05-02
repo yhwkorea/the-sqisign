@@ -1,0 +1,20 @@
+=== MLLL vs HNF Intermediate Bit Size Benchmark ===
+Level: 1, Norm bitsize: 127, Iterations: 5000
+GRAM prealloc (Phase 2 candidate B): ON
+GRAM fp       (Phase 2 candidate C): OFF
+
+Generating 5000 random ideal lattice pairs (bitsize=127)...
+Mode: alg3
+  Set 1: 6802.30 ms
+Generation done.
+
+T    |   Inp |  HNFint |  GRMtot    GRMv    GRMg |  HNFout  GRMout |  HNFms  GRMms
+-----+-------+---------+-------------------------+-----------------+---------------
+
+=== Alg 3 Summary ===
+HNF  intermediate:  avg=508  max=514
+GRAM total:         avg=508  max=514
+GRAM vec coords:    avg=127  max=129  (Lemma 1)
+GRAM Gram entries:  avg=503  max=507  (Lemma 3)
+Output bits:        HNF avg=126 max=128  GRAM avg=126 max=128
+Total time:         HNF=77.55ms  GRAM=60.74ms  (GRAM/HNF=0.78)

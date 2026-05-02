@@ -201,16 +201,29 @@ main(int argc, char *argv[])
     int norm_bitsize = 127;
     int level = 1;
     const char *mode = "alg2";
+    int prealloc = 0;
+    int fp = 0;
     int ret_code = 0;
 
     for (int i = 1; i < argc; i++) {
         if (sscanf(argv[i], "--iterations=%d", &iterations) == 1) continue;
         if (sscanf(argv[i], "--level=%d", &level) == 1) continue;
         if (strncmp(argv[i], "--mode=", 7) == 0) { mode = argv[i] + 7; continue; }
+        if (strcmp(argv[i], "--prealloc") == 0) { prealloc = 1; continue; }
+        if (strcmp(argv[i], "--fp") == 0) { fp = 1; continue; }
         if (strcmp(argv[i], "--help") == 0) {
-            printf("Usage: %s [--level=1|3|5] [--iterations=N] [--mode=alg2|alg3]\n", argv[0]);
+            printf("Usage: %s [--level=1|3|5] [--iterations=N] "
+                   "[--mode=alg2|alg3] [--prealloc] [--fp]\n", argv[0]);
+            printf("  --prealloc: enable Phase 2 candidate B mpz_realloc2 hints on the GRAM path.\n");
+            printf("  --fp:       enable Phase 2 candidate C fixed-precision body on the GRAM path.\n");
+            printf("  (--prealloc and --fp are independent; fp takes precedence when both set.)\n");
             return 0;
         }
+    }
+
+    if (prealloc && fp) {
+        fprintf(stderr, "WARN: both --prealloc and --fp set; fp path wins "
+                "(prealloc hints do not apply to the fp body).\n");
     }
 
     if (strcmp(mode, "alg2") != 0 && strcmp(mode, "alg3") != 0) {
@@ -241,8 +254,15 @@ main(int argc, char *argv[])
         norm_bitsize = 127;
     }
 
+    quat_mlll_gram_set_prealloc_mode(prealloc);
+    quat_mlll_gram_set_fp_mode(fp);
+
     printf("=== MLLL vs HNF Intermediate Bit Size Benchmark ===\n");
-    printf("Level: %d, Norm bitsize: %d, Iterations: %d\n\n", level, norm_bitsize, iterations);
+    printf("Level: %d, Norm bitsize: %d, Iterations: %d\n", level, norm_bitsize, iterations);
+    printf("GRAM prealloc (Phase 2 candidate B): %s\n",
+           prealloc ? "ON" : "OFF");
+    printf("GRAM fp       (Phase 2 candidate C): %s\n\n",
+           fp ? "ON" : "OFF");
 
     quat_alg_t alg;
     quat_p_extremal_maximal_order_t order;

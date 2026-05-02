@@ -1,0 +1,43 @@
+=== L1_alg3_10000_prealloc ===
+=== MLLL vs HNF Intermediate Bit Size Benchmark ===
+Level: 1, Norm bitsize: 127, Iterations: 10000
+GRAM prealloc (Phase 2 candidate B): ON
+
+Generating 10000 random ideal lattice pairs (bitsize=127)...
+Mode: alg3
+  Set 1: 13228.75 ms
+Generation done.
+
+T    |   Inp |  HNFint |  GRMtot    GRMv    GRMg |  HNFout  GRMout |  HNFms  GRMms
+-----+-------+---------+-------------------------+-----------------+---------------
+
+=== Alg 3 Summary ===
+HNF  intermediate:  avg=508  max=514
+GRAM total:         avg=508  max=514
+GRAM vec coords:    avg=128  max=129  (Lemma 1)
+GRAM Gram entries:  avg=503  max=507  (Lemma 3)
+Output bits:        HNF avg=127 max=128  GRAM avg=127 max=128
+Total time:         HNF=153.45ms  GRAM=147.04ms  (GRAM/HNF=0.96)
+	Command being timed: "./src/quaternion/ref/generic/test/sqisign_bm_mlll --level=1 --iterations=10000 --mode=alg3 --prealloc"
+	User time (seconds): 11.95
+	System time (seconds): 1.57
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:13.54
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 29928
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 3
+	Minor (reclaiming a frame) page faults: 6449
+	Voluntary context switches: 56
+	Involuntary context switches: 13
+	Swaps: 0
+	File system inputs: 224
+	File system outputs: 0
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
