@@ -136,7 +136,7 @@ P3-2′ 통합 후 fp 백엔드 폭 부족이 발견됨. 3회 iteration:
     cmake -B build_mlll -DSQISIGN_BUILD_TYPE=ref -DSQISIGN_USE_MLLL_GRAM=ON
     make -C build_mlll && ctest --test-dir build_mlll
     ```
-- [ ] **P3-4** 벤치 모드: `--mode=alg2|alg3|alg4` 통일 (alg1 = MLLL 커널은 unit-level만, e2e bench 대상 아님)
+- [x] **P3-4** 벤치 모드: `--mode=alg2|alg3|alg4` 통일 — **완료 (2026-05-02)**. `mlll_benchmark.c` 에 `alg4_result_t` + `bench_one_alg4` + main 의 alg4 분기 추가. Alg 4 (`quat_lideal_prime_norm_reduced_equivalent`) 입력 ideal 을 `quat_lideal_create` 로 두 인스턴스(HNF/GRAM) 동일 빌드 후 in-place HNF↔MLLL_GRAM 비교. 출력 metric: input bits, basis output bits, norm output bits, success/fail rate, time. lvl1 5 iter smoke = HNF 5/5 + GRAM 5/5 PASS, output norm bits 동치 (avg 158, max 257/258), GRAM/HNF 시간비 1.59. (alg1 = MLLL 커널은 unit-level만, e2e bench 대상 아님.)
 - [x] **P3-5** 동치성 테스트 — **완료 (2026-04-30, CI에서 검증)**:
   - 단위 레벨: `quat_lideal_reduce_basis` ↔ `_mlll_gram` lattice equality 25 trials PASS (`sqisign_test_mlll`).
   - e2e self-consistency: ON 빌드의 ctest 통과 = SQIsign protocol 정상 동작:
