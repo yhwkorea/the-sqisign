@@ -49,7 +49,10 @@ int ReadHex(FILE *infile, unsigned char *A, int Length, char *str);
 void fprintBstr(FILE *fp, char *S, unsigned char *A, unsigned long long L);
 
 int main(void) {
-  char fn_req[32], fn_rsp[32];
+  /* fn_rsp must fit "PQCsignKAT_%d_%s.rsp.MLLL" (≤ 64 bytes) when
+   * SQISIGN_USE_MLLL_GRAM is on; HNF default ".rsp" needs ≤ 32. Use 64 to
+   * cover both cases (CLAUDE.md §5.3). */
+  char fn_req[64], fn_rsp[64];
   FILE *fp_req, *fp_rsp;
   unsigned char seed[48];
   unsigned char msg[3300];
@@ -68,8 +71,16 @@ int main(void) {
     printf("Couldn't open <%s> for write\n", fn_req);
     return KAT_FILE_OPEN_ERROR;
   }
+#ifdef SQISIGN_USE_MLLL_GRAM
+  /* Phase 3-3: MLLL build is not byte-compatible with HNF baseline (different
+   * GL_4(Z) lattice representative). Output to .rsp.MLLL to avoid overwriting
+   * HNF reference and to make the file's origin explicit (CLAUDE.md §5.3). */
+  sprintf(fn_rsp, "PQCsignKAT_%d_%s.rsp.MLLL", CRYPTO_SECRETKEYBYTES,
+          CRYPTO_ALGNAME);
+#else
   sprintf(fn_rsp, "PQCsignKAT_%d_%s.rsp", CRYPTO_SECRETKEYBYTES,
           CRYPTO_ALGNAME);
+#endif
   if ((fp_rsp = fopen(fn_rsp, "w")) == NULL) {
     printf("Couldn't open <%s> for write\n", fn_rsp);
     return KAT_FILE_OPEN_ERROR;
