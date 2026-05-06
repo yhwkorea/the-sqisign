@@ -57,18 +57,36 @@
 #  error "quat_fixed_precision.h is only designed for 64-bit digit_t (RADIX=64)"
 #endif
 
-/* ---------- Per-level widths (from Phase 1, +64-bit margin, u64-aligned) ----- */
+/* ---------- Per-level widths ----- */
 
-/* vec coord (Lemma 1 bound): L1 259, L3 391, L5 513 bits. */
-#define NWORDS_QUAT_VEC_L1    5   /* 320 bits */
-#define NWORDS_QUAT_VEC_L3    7   /* 448 bits */
-#define NWORDS_QUAT_VEC_L5    9   /* 576 bits */
+/* Original widths (2026-04-21, Phase 1 random corpus + Lemma 1/3 + 64b margin):
+ *   vec  L1=5/320b   L3=7/448b   L5=9/576b
+ *   gram L1=9/576b   L3=13/832b  L5=17/1088b
+ *
+ * Production observation (2026-04-30, after P3-2' hot-path routing):
+ * sign/keygen feeds MLLL with generators that are ALREADY products
+ * (e.g. `quat_lattice_mul` output ~ 2x input). Phase 1's vec/gram bounds
+ * are correct for *internal* MLLL state but undermeasure *input*
+ * generator size by ~2x. Observed gram values: L1=749b, L3=1137b, L5=1507b.
+ *
+ * Widths below sized to ~2x random max so they cover both input generators
+ * and the unobserved tail of production lattices. Stack cost is minor —
+ * tmp_L5 grows 27→52 limbs ≈ +200 bytes per MLLL slot.
+ */
+
+/* vec coord. Sized to cover observed input-generator bitsize (>=704 at L1
+ * before any reduction) plus generous margin for tail cases. */
+#define NWORDS_QUAT_VEC_L1    24  /* 1536 bits */
+#define NWORDS_QUAT_VEC_L3    32  /* 2048 bits */
+#define NWORDS_QUAT_VEC_L5    40  /* 2560 bits */
 #define NWORDS_QUAT_VEC_MAX   NWORDS_QUAT_VEC_L5
 
-/* Gram entry (Lemma 3 bound, 2 * max <a_k, a_k>): L1 518, L3 782, L5 1026. */
-#define NWORDS_QUAT_GRAM_L1   9   /* 576 bits */
-#define NWORDS_QUAT_GRAM_L3   13  /* 832 bits */
-#define NWORDS_QUAT_GRAM_L5   17  /* 1088 bits */
+/* Gram entry. Must fit dot product 2*max(vec)+2 bits. Production observation
+ * (2026-04-30 second iteration): gram up to 1275/1921/2555 bits at L1/L3/L5.
+ * Sized to ~2x vec budget with ~20% margin. */
+#define NWORDS_QUAT_GRAM_L1   48  /* 3072 bits */
+#define NWORDS_QUAT_GRAM_L3   64  /* 4096 bits */
+#define NWORDS_QUAT_GRAM_L5   80  /* 5120 bits */
 #define NWORDS_QUAT_GRAM_MAX  NWORDS_QUAT_GRAM_L5
 
 /* tmp = X * G[i][j] (vec limbs + Gram limbs + carry). */

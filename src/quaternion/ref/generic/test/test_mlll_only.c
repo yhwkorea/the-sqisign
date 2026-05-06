@@ -53,6 +53,18 @@ int main(void)
     printf("lideal_create_gram_equivalence done (res=%d)\n", res);
     fflush(stdout);
 
+    printf("Starting MLLL test: lideal_reduce_basis_gram_equivalence...\n");
+    fflush(stdout);
+    res |= quat_test_lideal_reduce_basis_gram_equivalence();
+    printf("lideal_reduce_basis_gram_equivalence done (res=%d)\n", res);
+    fflush(stdout);
+
+    printf("Starting MLLL test: lideal_prime_norm_reduced_equivalent_gram...\n");
+    fflush(stdout);
+    res |= quat_test_lideal_prime_norm_reduced_equivalent_gram();
+    printf("lideal_prime_norm_reduced_equivalent_gram done (res=%d)\n", res);
+    fflush(stdout);
+
     printf("Starting MLLL test: gram_prealloc_equivalence...\n");
     fflush(stdout);
     res |= quat_test_mlll_gram_prealloc_equivalence();

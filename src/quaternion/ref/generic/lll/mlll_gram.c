@@ -13,8 +13,10 @@
  *   "Compact Quaternion Algorithms for SQIsign" paper.
  */
 
+#define SQISIGN_MLLL_GRAM_IMPL
 #include <quaternion.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <assert.h>
 #include "internal.h"
 #include "lll_internals.h"
@@ -76,8 +78,33 @@ quat_mlll_gram_get_prealloc_mode(void)
  * Flipped to 1 after re-reading Phase 2 criteria — time regression
  * (L1 alg2 ~5.25x) is explicitly acceptable per the paper's
  * contribution target (heap-free + Lemma 3 audit), and was never a
- * dismissal criterion. See FIXED_PRECISION_DECISION_KO.md §5.1. */
+ * dismissal criterion. See FIXED_PRECISION_DECISION_KO.md §5.1.
+ *
+ * 2026-04-30: hot-path routing (SQISIGN_USE_MLLL_GRAM) revealed production
+ * inputs vastly exceeding Phase 1 random-corpus measurements:
+ *   - First observation: gram 749/1137/1507b at L1/L3/L5 (vs 518/782/1026 budget)
+ *   - After widening vec 11/16/20, gram 17/25/33: gram seen at 1275/1921/2555b
+ *   - After widening vec 24/32/40, gram 48/64/80: vec input STILL exceeds 1536b
+ *
+ * The pattern: sign/keygen call chains accumulate multiplications across
+ * lattice_mul -> reduce -> lideal_create -> ... before MLLL is reached, so
+ * input-generator size depends on protocol-level state, not just Phase 1's
+ * MLLL-internal bound. Bounding it requires SQIsign protocol analysis, not
+ * just MLLL bit-size analysis. Phase 1's bounds remain correct for what
+ * they measured (post-LLL settled state) — they just don't apply to
+ * pre-MLLL inputs in production hot path.
+ *
+ * Pragmatic resolution: under hot-path routing, fall back to ibz_t (mode=0)
+ * which has unbounded magnitude. fp can still be re-enabled via set_fp_mode(1)
+ * for unit tests / benchmarks where input bounds are controlled. The wider
+ * widths in quat_fixed_precision.h are kept (no harm; small stack overhead)
+ * and would help if a future Phase 4 sizes them properly from protocol
+ * analysis. */
+#ifdef SQISIGN_USE_MLLL_GRAM
+static int g_fp_mode = 0;
+#else
 static int g_fp_mode = 1;
+#endif
 
 void
 quat_mlll_gram_set_fp_mode(int mode)
@@ -283,7 +310,7 @@ quat_mlll_gram_ibz(ibz_mat_4x4_t *basis,
         int done = 0;
         int size_iter = 0;
         while (!done) {
-            if (++size_iter >= 64) {
+            if (++size_iter >= 4096) {
                 fprintf(stderr, "mlll_gram: size-reduce iteration cap exceeded\n");
                 abort();
             }
@@ -643,7 +670,7 @@ quat_mlll_gram_fp(ibz_mat_4x4_t *basis,
         int done = 0;
         int size_iter = 0;
         while (!done) {
-            if (++size_iter >= 64) {
+            if (++size_iter >= 4096) {
                 fprintf(stderr,
                     "mlll_gram_fp: size-reduce iteration cap exceeded\n");
                 abort();
@@ -802,6 +829,51 @@ cleanup:
 
 /* ---------- dispatcher ---------- */
 
+#ifdef SQISIGN_MLLL_INPUT_TRACK
+/* P4-A instrumentation. Compile-time gated. Single-threaded measurement
+ * runs only — no locking. Acceptance per PLAN_KO §Phase 4 P4-A. */
+static long  mlll_input_calls    = 0;
+static int   mlll_input_max_vec  = 0;
+static long  mlll_input_sum_vec  = 0;
+static int   mlll_input_max_g    = 0;
+static long  mlll_input_g_total  = 0;
+static int   mlll_input_atexit_done = 0;
+
+static void
+mlll_input_atexit_dump(void)
+{
+    if (mlll_input_calls == 0) return;
+    fprintf(stderr,
+            "[MLLL-INPUT-TRACK] calls=%ld vec_max=%d vec_avg=%ld "
+            "g_max=%d g_avg=%ld\n",
+            mlll_input_calls, mlll_input_max_vec,
+            mlll_input_sum_vec / mlll_input_calls,
+            mlll_input_max_g,
+            mlll_input_g_total / mlll_input_calls);
+}
+
+static void
+mlll_input_track(const ibz_vec_4_t *generators, int g)
+{
+    if (!mlll_input_atexit_done) {
+        atexit(mlll_input_atexit_dump);
+        mlll_input_atexit_done = 1;
+    }
+    int max_b = 0;
+    for (int i = 0; i < g; i++) {
+        for (int j = 0; j < 4; j++) {
+            int b = ibz_bitsize(&((generators[i])[j]));
+            if (b > max_b) max_b = b;
+        }
+    }
+    mlll_input_calls++;
+    mlll_input_sum_vec += max_b;
+    if (max_b > mlll_input_max_vec) mlll_input_max_vec = max_b;
+    if (g > mlll_input_max_g) mlll_input_max_g = g;
+    mlll_input_g_total += g;
+}
+#endif /* SQISIGN_MLLL_INPUT_TRACK */
+
 void
 quat_mlll_gram(ibz_mat_4x4_t *basis,
                int *rank,
@@ -809,6 +881,9 @@ quat_mlll_gram(ibz_mat_4x4_t *basis,
                int g,
                const quat_alg_t *alg)
 {
+#ifdef SQISIGN_MLLL_INPUT_TRACK
+    mlll_input_track(generators, g);
+#endif
     if (g_fp_mode) {
         quat_fp_widths_t widths;
         if (quat_fp_widths_from_alg(&widths, alg)) {

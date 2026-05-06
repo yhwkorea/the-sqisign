@@ -4,3 +4,14 @@ latex/
 .vscode
 
 *.DS_Store
+
+# Temporary working files (CLAUDE.md §5 — local-only KAT scratch)
+_kat_on/
+_kat_off/
+_mlll_old.c
+_run_scheme_tests.sh
+.claude-uploads/
+
+# Bench logs (experimental, not source-of-truth)
+src/quaternion/ref/generic/lll/bench_logs/p3_1_alg4_budget/
+src/quaternion/ref/generic/lll/bench_logs/p3_1c_heuristic/

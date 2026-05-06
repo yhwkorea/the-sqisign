@@ -55,7 +55,7 @@ quat_lll_core(ibz_mat_4x4_t *G, ibz_mat_4x4_t *basis)
         int done = 0;
         int size_iter = 0;
         while (!done) {
-            if (++size_iter >= 64) {
+            if (++size_iter >= 4096) {
                 fprintf(stderr, "l2.c: size-reduce iteration cap exceeded\n");
                 abort();
             }

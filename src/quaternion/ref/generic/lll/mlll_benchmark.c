@@ -16,6 +16,7 @@
 #include <string.h>
 #include <inttypes.h>
 
+#define SQISIGN_MLLL_GRAM_IMPL
 #include <quaternion.h>
 #include <internal.h>
 #include "lll_internals.h"
@@ -192,6 +193,91 @@ bench_one_alg3(const quat_lattice_t *src_lat,
     quat_alg_elem_finalize(&x);
 }
 
+/* ---------- Alg 4 bench: quat_lideal_prime_norm_reduced_equivalent HNF vs Gram ----------
+ *
+ * Note: per paper Sampling §04 / PLAN_KO §P3.2-b, Alg 4 itself does not call
+ * MLLL — it uses a reduced basis (LLL). The HNF↔MLLL_GRAM split here lives
+ * inside `quat_lideal_reduce_basis(_mlll_gram)` which is invoked at the very
+ * top of each variant. So this bench measures the cost/quality difference of
+ * basis reduction as it propagates through Alg 4's prime-norm search loop.
+ */
+
+typedef struct {
+    int input_bits;
+    int hnf_out_bits, gram_out_bits;
+    int hnf_norm_bits, gram_norm_bits;
+    int hnf_inter_bits;
+    int gram_inter_bits, gram_vec_bits, gram_gso_bits;
+    double hnf_time_ms, gram_time_ms;
+    int hnf_found, gram_found;
+} alg4_result_t;
+
+static void
+bench_one_alg4(const quat_lattice_t *src_lat,
+               const ibz_t *norm,
+               const quat_lattice_t *order,
+               const quat_alg_t *alg,
+               alg4_result_t *out)
+{
+    quat_alg_elem_t x;
+    quat_alg_elem_init(&x);
+    for (int j = 0; j < 4; j++)
+        ibz_copy(&x.coord[j], &src_lat->basis[j][0]);
+    ibz_copy(&x.denom, &src_lat->denom);
+
+    quat_left_ideal_t I_hnf, I_gram;
+    quat_left_ideal_init(&I_hnf);
+    quat_left_ideal_init(&I_gram);
+
+    /* Build identical input ideals for both paths (Alg 3 = quat_lideal_create). */
+    quat_lideal_create(&I_hnf, &x, norm, order, alg);
+    quat_lideal_create(&I_gram, &x, norm, order, alg);
+
+    out->input_bits = 0;
+    for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) {
+        int b = ibz_bitsize(&I_hnf.lattice.basis[i][j]);
+        if (b > out->input_bits) out->input_bits = b;
+    }
+
+    clock_t t0, t1;
+
+    /* HNF path: in-place, returns 1 on success. */
+    tracker_reset();
+    t0 = clock();
+    out->hnf_found = quat_lideal_prime_norm_reduced_equivalent(&I_hnf, alg, 30, 20);
+    t1 = clock();
+    out->hnf_time_ms = (double)(t1 - t0) * 1000.0 / CLOCKS_PER_SEC;
+    out->hnf_out_bits = 0;
+    for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) {
+        int b = ibz_bitsize(&I_hnf.lattice.basis[i][j]);
+        if (b > out->hnf_out_bits) out->hnf_out_bits = b;
+    }
+    out->hnf_norm_bits = ibz_bitsize(&I_hnf.norm);
+    out->hnf_inter_bits = tracker_get_max();
+    tracker_disable();
+
+    /* GRAM path: same contract. */
+    tracker_reset();
+    t0 = clock();
+    out->gram_found = quat_lideal_prime_norm_reduced_equivalent_mlll_gram(&I_gram, alg, 30, 20);
+    t1 = clock();
+    out->gram_time_ms = (double)(t1 - t0) * 1000.0 / CLOCKS_PER_SEC;
+    out->gram_out_bits = 0;
+    for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) {
+        int b = ibz_bitsize(&I_gram.lattice.basis[i][j]);
+        if (b > out->gram_out_bits) out->gram_out_bits = b;
+    }
+    out->gram_norm_bits = ibz_bitsize(&I_gram.norm);
+    out->gram_inter_bits = tracker_get_max();
+    out->gram_vec_bits = tracker_get_vec_max();
+    out->gram_gso_bits = tracker_get_gso_max();
+    tracker_disable();
+
+    quat_left_ideal_finalize(&I_hnf);
+    quat_left_ideal_finalize(&I_gram);
+    quat_alg_elem_finalize(&x);
+}
+
 /* ---------- main ---------- */
 
 int
@@ -213,7 +299,10 @@ main(int argc, char *argv[])
         if (strcmp(argv[i], "--fp") == 0) { fp = 1; continue; }
         if (strcmp(argv[i], "--help") == 0) {
             printf("Usage: %s [--level=1|3|5] [--iterations=N] "
-                   "[--mode=alg2|alg3] [--prealloc] [--fp]\n", argv[0]);
+                   "[--mode=alg2|alg3|alg4] [--prealloc] [--fp]\n", argv[0]);
+            printf("  --mode=alg2: CompactIdealMultiplication (lattice_mul HNF vs MLLL vs MLLL_GRAM).\n");
+            printf("  --mode=alg3: RandomIdealGivenPrimeNorm (lideal_create HNF vs MLLL_GRAM).\n");
+            printf("  --mode=alg4: RandomEquivalentPrimeIdeal (prime_norm_reduced_equivalent HNF vs MLLL_GRAM).\n");
             printf("  --prealloc: enable Phase 2 candidate B mpz_realloc2 hints on the GRAM path.\n");
             printf("  --fp:       enable Phase 2 candidate C fixed-precision body on the GRAM path.\n");
             printf("  (--prealloc and --fp are independent; fp takes precedence when both set.)\n");
@@ -226,8 +315,8 @@ main(int argc, char *argv[])
                 "(prealloc hints do not apply to the fp body).\n");
     }
 
-    if (strcmp(mode, "alg2") != 0 && strcmp(mode, "alg3") != 0) {
-        fprintf(stderr, "ERROR: unknown --mode=%s (expected alg2 or alg3)\n", mode);
+    if (strcmp(mode, "alg2") != 0 && strcmp(mode, "alg3") != 0 && strcmp(mode, "alg4") != 0) {
+        fprintf(stderr, "ERROR: unknown --mode=%s (expected alg2, alg3, or alg4)\n", mode);
         return 1;
     }
     if (iterations <= 0) {
@@ -303,6 +392,8 @@ main(int argc, char *argv[])
 
     printf("Generating %d random ideal lattice pairs (bitsize=%d)...\n", iterations, norm_bitsize);
     int is_alg3 = (strcmp(mode, "alg3") == 0);
+    int is_alg4 = (strcmp(mode, "alg4") == 0);
+    int needs_set2 = !is_alg3 && !is_alg4;
     printf("Mode: %s\n", mode);
 
     clock_t gen_t0 = clock();
@@ -310,7 +401,7 @@ main(int argc, char *argv[])
     clock_t gen_t1 = clock();
     printf("  Set 1: %.2f ms\n", (double)(gen_t1 - gen_t0) * 1000.0 / CLOCKS_PER_SEC);
     int ret2 = 0;
-    if (!is_alg3) {
+    if (needs_set2) {
         gen_t0 = clock();
         ret2 = quat_test_input_random_ideal_lattice_generation(lats2, norms2, norm_bitsize, iterations, &params);
         gen_t1 = clock();
@@ -322,6 +413,85 @@ main(int argc, char *argv[])
         goto done;
     }
     printf("Generation done.\n\n");
+
+    if (is_alg4) {
+        /* ---- Alg 4 bench ---- */
+        printf("%-4s | %5s | %7s | %7s %7s %7s | %7s %7s | %5s %5s | %4s %4s | %6s %6s\n",
+               "T", "Inp", "HNFint",
+               "GRMtot", "GRMv", "GRMg",
+               "HNFout", "GRMout",
+               "HNFn", "GRMn",
+               "Hok", "Gok",
+               "HNFms", "GRMms");
+        printf("-----+-------+---------+-------------------------+-----------------+-----------+---------+---------------\n");
+
+        long sum_hnf_inter = 0, sum_gram_inter = 0, sum_gram_vec = 0, sum_gram_gso = 0;
+        long sum_hnf_out = 0, sum_gram_out = 0;
+        long sum_hnf_norm = 0, sum_gram_norm = 0;
+        int max_hnf_inter = 0, max_gram_inter = 0, max_gram_vec = 0, max_gram_gso = 0;
+        int max_hnf_out = 0, max_gram_out = 0;
+        int max_hnf_norm = 0, max_gram_norm = 0;
+        int hnf_success = 0, gram_success = 0;
+        double total_hnf_ms = 0, total_gram_ms = 0;
+
+        for (int i = 0; i < iterations; i++) {
+            alg4_result_t r;
+            bench_one_alg4(&lats1[i], &norms1[i], &(order.order), &alg, &r);
+
+            if (iterations <= 50) {
+                printf("%-4d | %5d | %7d | %7d %7d %7d | %7d %7d | %5d %5d | %4d %4d | %6.1f %6.1f\n",
+                       i, r.input_bits, r.hnf_inter_bits,
+                       r.gram_inter_bits, r.gram_vec_bits, r.gram_gso_bits,
+                       r.hnf_out_bits, r.gram_out_bits,
+                       r.hnf_norm_bits, r.gram_norm_bits,
+                       r.hnf_found, r.gram_found,
+                       r.hnf_time_ms, r.gram_time_ms);
+            }
+
+            sum_hnf_inter += r.hnf_inter_bits;
+            sum_gram_inter += r.gram_inter_bits;
+            sum_gram_vec += r.gram_vec_bits;
+            sum_gram_gso += r.gram_gso_bits;
+            sum_hnf_out += r.hnf_out_bits;
+            sum_gram_out += r.gram_out_bits;
+            sum_hnf_norm += r.hnf_norm_bits;
+            sum_gram_norm += r.gram_norm_bits;
+            if (r.hnf_inter_bits > max_hnf_inter) max_hnf_inter = r.hnf_inter_bits;
+            if (r.gram_inter_bits > max_gram_inter) max_gram_inter = r.gram_inter_bits;
+            if (r.gram_vec_bits > max_gram_vec) max_gram_vec = r.gram_vec_bits;
+            if (r.gram_gso_bits > max_gram_gso) max_gram_gso = r.gram_gso_bits;
+            if (r.hnf_out_bits > max_hnf_out) max_hnf_out = r.hnf_out_bits;
+            if (r.gram_out_bits > max_gram_out) max_gram_out = r.gram_out_bits;
+            if (r.hnf_norm_bits > max_hnf_norm) max_hnf_norm = r.hnf_norm_bits;
+            if (r.gram_norm_bits > max_gram_norm) max_gram_norm = r.gram_norm_bits;
+            hnf_success += (r.hnf_found ? 1 : 0);
+            gram_success += (r.gram_found ? 1 : 0);
+            total_hnf_ms += r.hnf_time_ms;
+            total_gram_ms += r.gram_time_ms;
+        }
+
+        printf("\n=== Alg 4 Summary ===\n");
+        printf("HNF  intermediate:  avg=%ld  max=%d\n",
+               sum_hnf_inter / iterations, max_hnf_inter);
+        printf("GRAM total:         avg=%ld  max=%d\n",
+               sum_gram_inter / iterations, max_gram_inter);
+        printf("GRAM vec coords:    avg=%ld  max=%d  (Lemma 1)\n",
+               sum_gram_vec / iterations, max_gram_vec);
+        printf("GRAM Gram entries:  avg=%ld  max=%d  (Lemma 3)\n",
+               sum_gram_gso / iterations, max_gram_gso);
+        printf("Output basis bits:  HNF avg=%ld max=%d  GRAM avg=%ld max=%d\n",
+               sum_hnf_out / iterations, max_hnf_out,
+               sum_gram_out / iterations, max_gram_out);
+        printf("Output norm bits:   HNF avg=%ld max=%d  GRAM avg=%ld max=%d\n",
+               sum_hnf_norm / iterations, max_hnf_norm,
+               sum_gram_norm / iterations, max_gram_norm);
+        printf("Success rate:       HNF %d/%d  GRAM %d/%d\n",
+               hnf_success, iterations, gram_success, iterations);
+        printf("Total time:         HNF=%.2fms  GRAM=%.2fms  (GRAM/HNF=%.2f)\n",
+               total_hnf_ms, total_gram_ms,
+               total_hnf_ms > 0 ? total_gram_ms / total_hnf_ms : 0.0);
+        goto done;
+    }
 
     if (is_alg3) {
         /* ---- Alg 3 bench ---- */

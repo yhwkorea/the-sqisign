@@ -1,0 +1,87 @@
+name: MLLL routing check
+
+# Verifies SQISIGN_USE_MLLL_GRAM={OFF,ON} both compile and pass tests on a
+# GitHub-hosted runner. Independent of cmake.yml (self-hosted).
+#
+# Triggers:
+#   - push to feat/** or fix/** branches
+#   - manual dispatch from Actions tab
+
+on:
+  push:
+    branches:
+      - "feat/**"
+      - "fix/**"
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mlll_gram: ["OFF", "ON"]
+    name: "MLLL_GRAM=${{ matrix.mlll_gram }}"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libgmp-dev libmpfr-dev binutils
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DSQISIGN_BUILD_TYPE=ref \
+            -DSQISIGN_USE_MLLL_GRAM=${{ matrix.mlll_gram }} \
+            -DSQISIGN_TEST_REPS=10 \
+            -DENABLE_SIGN=ON \
+            -DGMP_LIBRARY=SYSTEM
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Routing check (symbols)
+        run: |
+          echo "=== Looking for sign.c.o object files ==="
+          mapfile -t SIGN_OBJS < <(find build -path '*signature*' -name 'sign.c.o' -type f)
+          if [ ${#SIGN_OBJS[@]} -eq 0 ]; then
+            echo "FAIL: no sign.c.o found under build/"
+            find build -name '*.o' | head -20
+            exit 1
+          fi
+          for obj in "${SIGN_OBJS[@]}"; do
+            echo "--- $obj ---"
+            nm --undefined-only "$obj" | grep -E 'quat_lideal_(create|reduce_basis|prime_norm_reduced_equivalent|lideal_mul_reduced)(_mlll_gram)?' || true
+          done
+          # Aggregate counts across all sign.c.o files
+          MLLL_HITS=$(nm --undefined-only "${SIGN_OBJS[@]}" 2>/dev/null | grep -cE '_mlll_gram$' || true)
+          HNF_HITS=$(nm --undefined-only "${SIGN_OBJS[@]}" 2>/dev/null | grep -cE 'quat_lideal_(create|reduce_basis|prime_norm_reduced_equivalent|lideal_mul_reduced)$' || true)
+          echo "MLLL undef refs: $MLLL_HITS"
+          echo "HNF  undef refs: $HNF_HITS"
+          if [ "${{ matrix.mlll_gram }}" = "ON" ]; then
+            test "$MLLL_HITS" -ge 1 || { echo "FAIL: ON build has no _mlll_gram refs in sign.c.o"; exit 1; }
+            echo "PASS: ON build references MLLL_GRAM variants"
+          else
+            test "$HNF_HITS" -ge 1 || { echo "FAIL: OFF build has no HNF refs in sign.c.o"; exit 1; }
+            echo "PASS: OFF build references HNF variants"
+          fi
+
+      - name: Test (excluding slow KAT)
+        working-directory: build
+        run: ctest -j4 --output-on-failure -E "KAT$"
+
+      - name: MLLL unit test
+        working-directory: build
+        run: |
+          BIN=$(find . -name 'sqisign_test_mlll' -executable -type f | head -1)
+          if [ -n "$BIN" ]; then
+            echo "Running $BIN"
+            "$BIN"
+          else
+            echo "sqisign_test_mlll binary not found (target may not be built in this config)"
+          fi
