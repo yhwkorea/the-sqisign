@@ -13,17 +13,18 @@ extern "C"
 #endif
 
 #ifndef IBZ_LIMBS
-/* SQISIGN_VARIANT is defined as lvl1, lvl3, or lvl5 by the build system */
-#define SQISIGN_LVL1 lvl1
-#define SQISIGN_LVL3 lvl3
-#define SQISIGN_LVL5 lvl5
-
-#if SQISIGN_VARIANT == SQISIGN_LVL1
-#define IBZ_LIMBS 110  /* NIST Level I */
-#elif SQISIGN_VARIANT == SQISIGN_LVL3
-#define IBZ_LIMBS 168  /* NIST Level III */
-#elif SQISIGN_VARIANT == SQISIGN_LVL5
-#define IBZ_LIMBS 222  /* NIST Level V */
+/* SQISIGN_VARIANT is defined as lvl1, lvl3, or lvl5 by the build system.
+ * The C preprocessor cannot compare identifier tokens with `==`, so the
+ * previous `#if SQISIGN_VARIANT == SQISIGN_LVL1` always collapsed to `0 == 0`
+ * and silently picked LVL1's limb count for every level. Use `##` token
+ * pasting to map the variant identifier to a numeric limb count instead. */
+#ifdef SQISIGN_VARIANT
+#define IBZ_LIMBS_FOR_lvl1 110  /* NIST Level I */
+#define IBZ_LIMBS_FOR_lvl3 168  /* NIST Level III */
+#define IBZ_LIMBS_FOR_lvl5 222  /* NIST Level V */
+#define IBZ_LIMBS_PASTE2(a, b) a##b
+#define IBZ_LIMBS_PASTE(a, b) IBZ_LIMBS_PASTE2(a, b)
+#define IBZ_LIMBS IBZ_LIMBS_PASTE(IBZ_LIMBS_FOR_, SQISIGN_VARIANT)
 #else
 #define IBZ_LIMBS 222  /* Default to NIST Level V */
 #endif
